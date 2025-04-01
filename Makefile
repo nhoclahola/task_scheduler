@@ -9,8 +9,16 @@ OBJ_DIR = obj
 LIB_DIR = lib
 DATA_DIR = data
 
-SOURCES = $(wildcard $(SRC_DIR)/*.c)
+# Tìm tất cả các file nguồn trong thư mục src và các thư mục con
+SOURCES = $(SRC_DIR)/main.c \
+          $(wildcard $(SRC_DIR)/core/*.c) \
+          $(wildcard $(SRC_DIR)/db/*.c) \
+          $(wildcard $(SRC_DIR)/cli/*.c) \
+          $(wildcard $(SRC_DIR)/utils/*.c)
+
+# Tạo danh sách các file đối tượng tương ứng
 OBJECTS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
+
 EXECUTABLE = $(BIN_DIR)/taskscheduler
 
 .PHONY: all clean directories
@@ -18,12 +26,29 @@ EXECUTABLE = $(BIN_DIR)/taskscheduler
 all: directories $(EXECUTABLE)
 
 directories:
-	mkdir -p $(BIN_DIR) $(OBJ_DIR) $(LIB_DIR) $(DATA_DIR)
+	mkdir -p $(BIN_DIR) $(OBJ_DIR) $(OBJ_DIR)/core $(OBJ_DIR)/db $(OBJ_DIR)/cli $(OBJ_DIR)/utils $(LIB_DIR) $(DATA_DIR)
 
 $(EXECUTABLE): $(OBJECTS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
+# Quy tắc cho file main.c
+$(OBJ_DIR)/main.o: $(SRC_DIR)/main.c
+	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c -o $@ $<
+
+# Quy tắc cho các file trong thư mục core
+$(OBJ_DIR)/core/%.o: $(SRC_DIR)/core/%.c
+	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c -o $@ $<
+
+# Quy tắc cho các file trong thư mục db
+$(OBJ_DIR)/db/%.o: $(SRC_DIR)/db/%.c
+	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c -o $@ $<
+
+# Quy tắc cho các file trong thư mục cli
+$(OBJ_DIR)/cli/%.o: $(SRC_DIR)/cli/%.c
+	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c -o $@ $<
+
+# Quy tắc cho các file trong thư mục utils
+$(OBJ_DIR)/utils/%.o: $(SRC_DIR)/utils/%.c
 	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c -o $@ $<
 
 clean:

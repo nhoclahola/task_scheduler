@@ -1,6 +1,6 @@
-#include "../include/scheduler.h"
-#include "../include/utils.h"
-#include "../include/db.h"
+#include "../../include/scheduler.h"
+#include "../../include/utils.h"
+#include "../../include/db.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

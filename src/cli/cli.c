@@ -1,7 +1,7 @@
-#include "../include/cli.h"
-#include "../include/scheduler.h"
-#include "../include/task.h"
-#include "../include/utils.h"
+#include "../../include/cli.h"
+#include "../../include/scheduler.h"
+#include "../../include/task.h"
+#include "../../include/utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
