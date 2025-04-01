@@ -20,7 +20,7 @@ Hệ thống quản lý và lập lịch tác vụ được viết bằng C vớ
 ## Cài đặt
 
 ```bash
-git clone https://github.com/your-username/task-scheduler.git
+git clone https://github.com/nhoclahola/task-scheduler.git
 cd task-scheduler
 make
 ```
@@ -83,10 +83,4 @@ task_scheduler/
 └── README.md         # Tài liệu này
 ```
 
-## Phát triển
 
-Tham khảo thêm tài liệu trong thư mục `docs/` cho thông tin chi tiết về API và kiến trúc hệ thống.
-
-## Giấy phép
-
-[Thêm thông tin về giấy phép của dự án] 
