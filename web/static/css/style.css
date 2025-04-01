@@ -1,0 +1,170 @@
+/* Custom CSS styles for Task Scheduler */
+
+/* Global styles */
+body {
+    background-color: #f8f9fa;
+}
+
+/* Card styling */
+.card {
+    border-radius: 0.5rem;
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    border: none;
+}
+
+.card-header {
+    border-top-left-radius: 0.5rem !important;
+    border-top-right-radius: 0.5rem !important;
+}
+
+.card-footer {
+    border-bottom-left-radius: 0.5rem !important;
+    border-bottom-right-radius: 0.5rem !important;
+}
+
+/* Button styling */
+.btn {
+    border-radius: 0.375rem;
+}
+
+.btn-group .btn {
+    border-radius: 0.25rem !important;
+    margin-right: 0.125rem;
+}
+
+/* Table styling */
+.table th {
+    background-color: #f8f9fa;
+}
+
+/* Form styling */
+.form-control, .form-select {
+    border-radius: 0.375rem;
+}
+
+/* navbar custom */
+.navbar {
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+/* Footer styling */
+footer {
+    box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.05);
+}
+
+/* Task status badges */
+.badge {
+    font-weight: 500;
+    padding: 0.35em 0.65em;
+}
+
+/* Flash messages */
+.alert {
+    border-radius: 0.5rem;
+}
+
+/* Custom scrollbar for code blocks */
+pre {
+    max-height: 300px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #dee2e6 #fff;
+}
+
+pre::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+pre::-webkit-scrollbar-track {
+    background: #f8f9fa;
+}
+
+pre::-webkit-scrollbar-thumb {
+    background-color: #dee2e6;
+    border-radius: 3px;
+}
+
+/* Code blocks */
+code {
+    background-color: #f8f9fa;
+    padding: 0.2em 0.4em;
+    border-radius: 0.25rem;
+    font-size: 0.875em;
+}
+
+pre code {
+    padding: 0;
+    background-color: transparent;
+}
+
+/* Icons in text */
+.text-icon {
+    width: 20px;
+    text-align: center;
+    margin-right: 0.25rem;
+}
+
+/* Hover effect for action buttons */
+.btn-action {
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.btn-action:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Custom animation for loading states */
+.loading {
+    position: relative;
+    overflow: hidden;
+}
+
+.loading::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0.4) 50%,
+        rgba(255, 255, 255, 0) 100%
+    );
+    animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(100%);
+    }
+}
+
+/* Modal customization */
+.modal-content {
+    border-radius: 0.5rem;
+    border: none;
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.2);
+}
+
+.modal-header {
+    border-top-left-radius: 0.5rem;
+    border-top-right-radius: 0.5rem;
+}
+
+/* Responsive adjustments */
+@media (max-width: 767.98px) {
+    .card-body {
+        padding: 1rem;
+    }
+    
+    .table-responsive {
+        border-radius: 0.5rem;
+    }
+} 

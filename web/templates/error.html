@@ -1,0 +1,16 @@
+{% extends 'layout.html' %}
+
+{% block title %}Lỗi{% endblock %}
+
+{% block content %}
+<div class="text-center py-5">
+    <div class="display-1 text-danger mb-4">
+        <i class="fas fa-exclamation-circle"></i>
+    </div>
+    <h1 class="mb-4">Đã xảy ra lỗi</h1>
+    <p class="lead mb-4">{{ error }}</p>
+    <a href="{{ url_for('index') }}" class="btn btn-primary">
+        <i class="fas fa-home me-1"></i>Trở về trang chủ
+    </a>
+</div>
+{% endblock %} 
