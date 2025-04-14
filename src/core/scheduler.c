@@ -261,16 +261,41 @@ bool scheduler_update_task(Scheduler *scheduler, Task task) {
         return false;
     }
     
+    // Lưu trữ các giá trị quan trọng trước khi cập nhật
+    time_t original_last_run_time = scheduler->tasks[index].last_run_time;
+    int original_exit_code = scheduler->tasks[index].exit_code;
+    
+    // In thông tin debug nếu có last_run_time
+    if (original_last_run_time > 0) {
+        char time_str[64];
+        struct tm *tm_info = localtime(&original_last_run_time);
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+        log_message(LOG_INFO, "Preserving last_run_time during update: %s", time_str);
+        log_message(LOG_INFO, "Preserving exit_code during update: %d", original_exit_code);
+    }
+    
     // Update the task
     scheduler->tasks[index] = task;
+    
+    // Đảm bảo giữ nguyên các giá trị lịch sử khi vô hiệu hóa task
+    // Khi task bị vô hiệu hóa, giá trị last_run_time và exit_code có thể bị mất
+    if (!task.enabled || (original_last_run_time > 0 && task.last_run_time == 0)) {
+        scheduler->tasks[index].last_run_time = original_last_run_time;
+        scheduler->tasks[index].exit_code = original_exit_code;
+        log_message(LOG_INFO, "Restored historical data for task %d (last_run_time: %ld, exit_code: %d)", 
+                   task.id, original_last_run_time, original_exit_code);
+    }
     
     // Make sure next run time is calculated
     task_calculate_next_run(&scheduler->tasks[index]);
     
+    // Tạo bản sao của task để gửi đến database
+    Task db_task = scheduler->tasks[index];
+    
     pthread_mutex_unlock(&scheduler->lock);
     
     // Update in database
-    if (!db_update_task(&task)) {
+    if (!db_update_task(&db_task)) {
         log_message(LOG_ERROR, "Failed to update task in database");
         return false;
     }
@@ -477,15 +502,43 @@ static void* scheduler_thread_func(void *arg) {
     
     log_message(LOG_INFO, "Scheduler thread started");
     
+    // Thêm biến lưu thời điểm khởi động
+    time_t startup_time = time(NULL);
+    // Thêm biến để kiểm tra trạng thái khởi động đầu tiên
+    bool is_first_run = true;
+    
     while (scheduler->running) {
         time_t now = time(NULL);
         
         pthread_mutex_lock(&scheduler->lock);
         
+        // Khi mới khởi động, thực hiện kiểm tra và cập nhật tất cả task quá hạn
+        if (is_first_run) {
+            for (int i = 0; i < scheduler->task_count; i++) {
+                Task *task = &scheduler->tasks[i];
+                
+                // Nếu task đã quá hạn, cập nhật lại thời gian chạy tiếp theo
+                if (task->enabled && task->next_run_time > 0 && task->next_run_time < startup_time) {
+                    log_message(LOG_INFO, "Task %d (%s) was scheduled in the past. Rescheduling.", 
+                              task->id, task->name);
+                    
+                    // Cập nhật lại thời gian chạy tiếp theo dựa trên lịch trình
+                    task_calculate_next_run(task);
+                    
+                    // Cập nhật vào database
+                    db_update_task(task);
+                }
+            }
+            
+            // Đánh dấu đã thực hiện lần kiểm tra đầu tiên
+            is_first_run = false;
+        }
+        
         // Check for tasks that need to be executed
         for (int i = 0; i < scheduler->task_count; i++) {
             Task *task = &scheduler->tasks[i];
             
+            // Đảm bảo task phải enabled và next_run_time phải > 0 và đã đến thời gian chạy
             if (task->enabled && task->next_run_time > 0 && task->next_run_time <= now) {
                 // Check if dependencies are satisfied for scheduled execution
                 if (task->dependency_count > 0) {

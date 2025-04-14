@@ -25,7 +25,9 @@ static const char *CREATE_TABLE_SQL =
     "working_dir TEXT, "
     "exec_mode INTEGER NOT NULL DEFAULT 0, "
     "script_content TEXT, "
-    "dep_behavior INTEGER NOT NULL DEFAULT 0"
+    "dep_behavior INTEGER NOT NULL DEFAULT 0, "
+    "schedule_type INTEGER NOT NULL DEFAULT 0, "
+    "cron_expression TEXT"
     ");"
     
     "CREATE TABLE IF NOT EXISTS dependencies ("
@@ -40,15 +42,15 @@ static const char *INSERT_TASK_SQL =
     "INSERT INTO tasks ("
     "id, name, command, creation_time, next_run_time, last_run_time, "
     "frequency, interval, enabled, exit_code, max_runtime, working_dir, "
-    "exec_mode, script_content, dep_behavior"
-    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+    "exec_mode, script_content, dep_behavior, schedule_type, cron_expression"
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
 
 static const char *UPDATE_TASK_SQL =
     "UPDATE tasks SET "
     "name = ?, command = ?, next_run_time = ?, last_run_time = ?, "
     "frequency = ?, interval = ?, enabled = ?, exit_code = ?, "
     "max_runtime = ?, working_dir = ?, exec_mode = ?, script_content = ?, "
-    "dep_behavior = ? "
+    "dep_behavior = ?, schedule_type = ?, cron_expression = ? "
     "WHERE id = ?;";
 
 static const char *DELETE_TASK_SQL =
@@ -224,6 +226,8 @@ bool db_save_task(const Task *task) {
     sqlite3_bind_int(stmt, 13, task->exec_mode);
     sqlite3_bind_text(stmt, 14, task->script_content, -1, SQLITE_STATIC);
     sqlite3_bind_int(stmt, 15, task->dep_behavior);
+    sqlite3_bind_int(stmt, 16, task->schedule_type);
+    sqlite3_bind_text(stmt, 17, task->cron_expression, -1, SQLITE_STATIC);
 
     // Execute the statement
     rc = sqlite3_step(stmt);
@@ -281,7 +285,9 @@ bool db_update_task(const Task *task) {
     sqlite3_bind_int(stmt, 11, task->exec_mode);
     sqlite3_bind_text(stmt, 12, task->script_content, -1, SQLITE_STATIC);
     sqlite3_bind_int(stmt, 13, task->dep_behavior);
-    sqlite3_bind_int(stmt, 14, task->id);
+    sqlite3_bind_int(stmt, 14, task->schedule_type);
+    sqlite3_bind_text(stmt, 15, task->cron_expression, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 16, task->id);
 
     // Execute the statement
     rc = sqlite3_step(stmt);
@@ -427,6 +433,14 @@ bool db_load_tasks(Task **tasks, int *count) {
         }
         
         task->dep_behavior = (DependencyBehavior)sqlite3_column_int(stmt, 14);
+        task->schedule_type = (ScheduleType)sqlite3_column_int(stmt, 15);
+        
+        const char *cron_expression = (const char*)sqlite3_column_text(stmt, 16);
+        if (cron_expression) {
+            safe_strcpy(task->cron_expression, cron_expression, sizeof(task->cron_expression));
+        } else {
+            task->cron_expression[0] = '\0';
+        }
         
         // Load dependencies
         if (!load_task_dependencies(task->id, task->dependencies, &task->dependency_count)) {
@@ -487,6 +501,14 @@ bool db_get_task(int task_id, Task *task) {
     }
     
     task->dep_behavior = (DependencyBehavior)sqlite3_column_int(stmt, 14);
+    task->schedule_type = (ScheduleType)sqlite3_column_int(stmt, 15);
+    
+    const char *cron_expression = (const char*)sqlite3_column_text(stmt, 16);
+    if (cron_expression) {
+        safe_strcpy(task->cron_expression, cron_expression, sizeof(task->cron_expression));
+    } else {
+        task->cron_expression[0] = '\0';
+    }
     
     sqlite3_finalize(stmt);
     

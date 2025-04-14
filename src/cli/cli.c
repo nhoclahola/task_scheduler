@@ -482,6 +482,9 @@ bool cli_init(const char *data_dir) {
 
 void cli_cleanup() {
     if (scheduler_initialized) {
+        // Đồng bộ dữ liệu với cơ sở dữ liệu trước khi dừng
+        scheduler_sync(&scheduler);
+        
         scheduler_stop(&scheduler);
         scheduler_cleanup(&scheduler);
         scheduler_initialized = false;
@@ -686,12 +689,16 @@ void cli_list_tasks(int argc, char *argv[]) {
         
         printf("Working Dir: %s\n", task->working_dir[0] ? task->working_dir : "(default)");
         printf("Max Runtime: %d seconds\n", task->max_runtime);
+        
+        // Luôn hiển thị thông tin Last Run nếu có, bất kể trạng thái enabled
         printf("Last Run: %s\n", last_run);
         
+        // Hiển thị Exit Code nếu đã từng chạy
         if (task->last_run_time > 0) {
             printf("Exit Code: %d\n", task->exit_code);
         }
         
+        // Hiển thị Next Run
         printf("Next Run: %s\n", next_run);
         
         // Show dependencies if any
@@ -768,11 +775,90 @@ void cli_enable_task(int argc, char *argv[]) {
         return;
     }
     
+    // Lưu lại giá trị last_run_time trước khi thay đổi trạng thái
+    time_t last_run_time = task->last_run_time;
+    
+    // Log thông tin chi tiết về last_run_time ban đầu
+    if (last_run_time > 0) {
+        char last_run_str[64] = "Never";
+        struct tm *tm_info = localtime(&last_run_time);
+        strftime(last_run_str, sizeof(last_run_str), "%Y-%m-%d %H:%M:%S", tm_info);
+        printf("Original last run time: %s\n", last_run_str);
+    } else {
+        printf("Original last run time: None\n");
+    }
+    
+    // Cập nhật trạng thái task thành enabled
     task->enabled = true;
-    task_calculate_next_run(task);
+    
+    // Đảm bảo giữ nguyên last_run_time
+    task->last_run_time = last_run_time;
+    
+    // Tính toán lại thời gian chạy tiếp theo
+    // Thay vì gọi trực tiếp task_calculate_next_run, chúng ta tự xử lý để đảm bảo last_run_time không bị mất
+    time_t now = time(NULL);
+    
+    // Đặt next_run_time tùy thuộc vào loại lịch trình
+    if (task->schedule_type == SCHEDULE_INTERVAL && task->interval > 0) {
+        // Nếu đã chạy trước đó, lên lịch dựa trên last_run_time
+        if (last_run_time > 0) {
+            task->next_run_time = last_run_time + (task->interval * 60);
+            // Nếu thời gian đã qua, lên lịch dựa trên hiện tại
+            if (task->next_run_time < now) {
+                task->next_run_time = now + (task->interval * 60);
+            }
+        } else {
+            // Nếu chưa từng chạy, lên lịch từ thời điểm hiện tại
+            task->next_run_time = now + (task->interval * 60);
+        }
+    } else if (task->schedule_type == SCHEDULE_CRON && task->cron_expression[0] != '\0') {
+        // Xử lý đơn giản cho một số biểu thức cron
+        if (strcmp(task->cron_expression, "* * * * *") == 0) {
+            // Mỗi phút
+            task->next_run_time = now + 60;
+        } else if (strncmp(task->cron_expression, "*/", 2) == 0) {
+            // */n định dạng (mỗi n phút)
+            int minutes = atoi(task->cron_expression + 2);
+            if (minutes > 0) {
+                task->next_run_time = now + (minutes * 60);
+            } else {
+                task->next_run_time = now + 3600; // Mặc định 1 giờ
+            }
+        } else {
+            // Biểu thức cron khác, mặc định 1 giờ
+            task->next_run_time = now + 3600;
+        }
+    } else {
+        // Schedule_MANUAL hoặc không xác định, không thiết lập next_run_time
+        task->next_run_time = 0;
+    }
+    
+    // Log thông tin sau khi thay đổi trạng thái
+    printf("Task status changed: enabled = %s\n", task->enabled ? "true" : "false");
+    if (task->next_run_time > 0) {
+        char next_run_str[64];
+        struct tm *tm_info = localtime(&task->next_run_time);
+        strftime(next_run_str, sizeof(next_run_str), "%Y-%m-%d %H:%M:%S", tm_info);
+        printf("Next run time set to: %s\n", next_run_str);
+    } else {
+        printf("Next run time not scheduled (manual task)\n");
+    }
+    printf("Preserving last run time: %ld\n", last_run_time);
     
     if (scheduler_update_task(&scheduler, *task)) {
         printf("Task %d enabled\n", task_id);
+        
+        // Kiểm tra xác nhận last_run_time đã được bảo toàn
+        Task *check_task = scheduler_get_task(&scheduler, task_id);
+        if (check_task) {
+            if (check_task->last_run_time == last_run_time) {
+                printf("Confirmed: last_run_time preserved correctly\n");
+            } else {
+                printf("Warning: last_run_time changed from %ld to %ld\n", 
+                       last_run_time, check_task->last_run_time);
+            }
+            free(check_task);
+        }
     } else {
         printf("Failed to enable task %d\n", task_id);
     }
@@ -798,11 +884,60 @@ void cli_disable_task(int argc, char *argv[]) {
         return;
     }
     
+    // Lưu lại các giá trị quan trọng trước khi thay đổi
+    time_t last_run_time = task->last_run_time;
+    int exit_code = task->exit_code;
+    time_t next_run_time = task->next_run_time;
+    
+    // Log thông tin chi tiết về last_run_time ban đầu
+    if (last_run_time > 0) {
+        char last_run_str[64] = "Never";
+        struct tm *tm_info = localtime(&last_run_time);
+        strftime(last_run_str, sizeof(last_run_str), "%Y-%m-%d %H:%M:%S", tm_info);
+        printf("Original last run time: %s\n", last_run_str);
+    } else {
+        printf("Original last run time: None\n");
+    }
+    
+    // Chỉ thay đổi trạng thái enabled thành false
     task->enabled = false;
+    
+    // Đảm bảo giữ nguyên last_run_time và exit_code
+    task->last_run_time = last_run_time;
+    task->exit_code = exit_code;
+    
+    // Đặt next_run_time = 0 thay vì gọi task_calculate_next_run
     task->next_run_time = 0;
     
+    // Log thông tin sau khi thay đổi trạng thái
+    printf("Task status changed: enabled = %s, next_run_time = 0\n", 
+           task->enabled ? "true" : "false");
+    printf("Preserving last run time: %ld\n", last_run_time);
+    printf("Preserving exit code: %d\n", exit_code);
+    
+    // Vẫn cập nhật task trong database
     if (scheduler_update_task(&scheduler, *task)) {
         printf("Task %d disabled\n", task_id);
+        
+        // Kiểm tra xác nhận last_run_time và exit_code đã được bảo toàn
+        Task *check_task = scheduler_get_task(&scheduler, task_id);
+        if (check_task) {
+            if (check_task->last_run_time == last_run_time) {
+                printf("Confirmed: last_run_time preserved correctly\n");
+            } else {
+                printf("Warning: last_run_time changed from %ld to %ld\n", 
+                       last_run_time, check_task->last_run_time);
+            }
+            
+            if (check_task->exit_code == exit_code) {
+                printf("Confirmed: exit_code preserved correctly\n");
+            } else {
+                printf("Warning: exit_code changed from %d to %d\n", 
+                       exit_code, check_task->exit_code);
+            }
+            
+            free(check_task);
+        }
     } else {
         printf("Failed to disable task %d\n", task_id);
     }
@@ -871,6 +1006,15 @@ void cli_view_task(int argc, char *argv[]) {
     
     printf("Working Directory: %s\n", task->working_dir[0] ? task->working_dir : "(default)");
     printf("Max Runtime: %d seconds\n", task->max_runtime);
+    
+    // Hiển thị thời gian tạo
+    char creation_time_str[64] = "Unknown";
+    if (task->creation_time > 0) {
+        time_t creation = task->creation_time;
+        struct tm *tm_info = localtime(&creation);
+        strftime(creation_time_str, sizeof(creation_time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+    }
+    printf("Created: %s\n", creation_time_str);
     
     char last_run[64] = "Never";
     if (task->last_run_time > 0) {

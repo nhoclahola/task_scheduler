@@ -34,13 +34,21 @@ bool task_calculate_next_run(Task *task) {
         return false;
     }
     
+    // Lưu giá trị last_run_time và exit_code ban đầu
+    time_t original_last_run_time = task->last_run_time;
+    int original_exit_code = task->exit_code;
+    
     time_t now = time(NULL);
     struct tm *local_time;
     struct tm next_time;
     
-    // If task is disabled, don't schedule it
+    // Nếu task bị vô hiệu hóa, chỉ đặt next_run_time = 0
+    // và giữ nguyên last_run_time và exit_code
     if (!task->enabled) {
         task->next_run_time = 0;
+        // Đảm bảo giữ nguyên các giá trị
+        task->last_run_time = original_last_run_time;
+        task->exit_code = original_exit_code;
         return true;
     }
     
@@ -49,6 +57,9 @@ bool task_calculate_next_run(Task *task) {
         case SCHEDULE_MANUAL:
             // Manually scheduled tasks don't get automatic next run times
             task->next_run_time = 0;
+            // Khôi phục lại các giá trị
+            task->last_run_time = original_last_run_time;
+            task->exit_code = original_exit_code;
             return true;
             
         case SCHEDULE_INTERVAL:
@@ -59,6 +70,9 @@ bool task_calculate_next_run(Task *task) {
                 // First time? Schedule from now
                 task->next_run_time = now + (task->interval * 60);
             }
+            // Khôi phục lại các giá trị
+            task->last_run_time = original_last_run_time;
+            task->exit_code = original_exit_code;
             return true;
             
         case SCHEDULE_CRON:
@@ -70,12 +84,18 @@ bool task_calculate_next_run(Task *task) {
                 if (strcmp(task->cron_expression, "* * * * *") == 0) {
                     // Every minute
                     task->next_run_time = now + 60;
+                    // Khôi phục lại các giá trị
+                    task->last_run_time = original_last_run_time;
+                    task->exit_code = original_exit_code;
                     return true;
                 } else if (strncmp(task->cron_expression, "*/", 2) == 0) {
                     // */n format (every n minutes)
                     int minutes = atoi(task->cron_expression + 2);
                     if (minutes > 0) {
                         task->next_run_time = now + (minutes * 60);
+                        // Khôi phục lại các giá trị
+                        task->last_run_time = original_last_run_time;
+                        task->exit_code = original_exit_code;
                         return true;
                     }
                 }
@@ -91,6 +111,9 @@ bool task_calculate_next_run(Task *task) {
                 // Invalid cron expression
                 task->next_run_time = 0;
             }
+            // Khôi phục lại các giá trị
+            task->last_run_time = original_last_run_time;
+            task->exit_code = original_exit_code;
             return true;
     }
     
@@ -105,10 +128,16 @@ bool task_calculate_next_run(Task *task) {
             // If it's a one-time task that already ran, don't reschedule
             if (task->last_run_time > 0) {
                 task->next_run_time = 0;
+                // Khôi phục lại các giá trị
+                task->last_run_time = original_last_run_time;
+                task->exit_code = original_exit_code;
                 return true;
             }
             // If next_run_time is already set, keep it
             if (task->next_run_time > now) {
+                // Khôi phục lại các giá trị
+                task->last_run_time = original_last_run_time;
+                task->exit_code = original_exit_code;
                 return true;
             }
             // Otherwise, schedule it for now
@@ -178,6 +207,10 @@ bool task_calculate_next_run(Task *task) {
             }
             break;
     }
+    
+    // Khôi phục lại các giá trị last_run_time và exit_code trước khi trả về
+    task->last_run_time = original_last_run_time;
+    task->exit_code = original_exit_code;
     
     return true;
 }
