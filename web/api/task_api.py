@@ -386,6 +386,12 @@ class TaskAPI:
                         task['last_run_time'] = 0
                     continue
                 
+                # Trích xuất exit code
+                exit_code_match = re.match(r"Exit Code: (-?\d+)", line)
+                if exit_code_match:
+                    task['exit_code'] = int(exit_code_match.group(1))
+                    continue
+                
                 # Trích xuất thời gian chạy tiếp theo
                 next_run_match = re.match(r"Next Run: (.+)", line)
                 if next_run_match:
@@ -454,16 +460,32 @@ class TaskAPI:
             return task_data['id']
         
         # Xây dựng lệnh add trong chế độ tương tác
-        # Dựa vào phân tích mã nguồn cli.c, cú pháp là: add <name> <command>
+        # Dựa vào phân tích mã nguồn cli.c, cú pháp là: add <n> <command>
         # Sau đó mới đến các tùy chọn
         name = task_data.get('name', '').replace('"', '\\"')  # Escape dấu ngoặc kép trong tên
         command = task_data.get('command', '').replace('"', '\\"')  # Escape dấu ngoặc kép trong lệnh
         
         cmd_parts = [f'add "{name}"']
         
-        # Thêm lệnh nếu có
-        if command:
-            cmd_parts.append(f'"{command}"')
+        # Xử lý chế độ thực thi
+        exec_mode = task_data.get('exec_mode', 0)
+        
+        if exec_mode == 0:  # Chế độ lệnh
+            # Thêm lệnh nếu có
+            if command:
+                cmd_parts.append(f'"{command}"')
+        else:  # Chế độ script
+            # Kiểm tra xem có script_file hay không
+            if 'script_file' in task_data and task_data['script_file']:
+                script_file = task_data['script_file'].replace('"', '\\"')
+                cmd_parts.append('-f')
+                cmd_parts.append(f'"{script_file}"')
+            # Hoặc dùng script_content
+            elif 'script_content' in task_data and task_data['script_content']:
+                cmd_parts.append('--script')
+                # Mã script cần được đóng gói đúng cách
+                script_content = task_data['script_content'].replace('"', '\\"')
+                cmd_parts.append(f'"{script_content}"')
         
         # Thêm các tùy chọn
         # Nếu có khoảng thời gian (interval)
@@ -539,9 +561,25 @@ class TaskAPI:
         
         cmd_parts = [f'add "{name}"']
         
-        # Thêm lệnh nếu có
-        if command:
-            cmd_parts.append(f'"{command}"')
+        # Xử lý chế độ thực thi
+        exec_mode = task_data.get('exec_mode', 0)
+        
+        if exec_mode == 0:  # Chế độ lệnh
+            # Thêm lệnh nếu có
+            if command:
+                cmd_parts.append(f'"{command}"')
+        else:  # Chế độ script
+            # Kiểm tra xem có script_file hay không
+            if 'script_file' in task_data and task_data['script_file']:
+                script_file = task_data['script_file'].replace('"', '\\"')
+                cmd_parts.append('-f')
+                cmd_parts.append(f'"{script_file}"')
+            # Hoặc dùng script_content
+            elif 'script_content' in task_data and task_data['script_content']:
+                cmd_parts.append('--script')
+                # Mã script cần được đóng gói đúng cách
+                script_content = task_data['script_content'].replace('"', '\\"')
+                cmd_parts.append(f'"{script_content}"')
         
         # Thêm các tùy chọn
         # Nếu có khoảng thời gian (interval)

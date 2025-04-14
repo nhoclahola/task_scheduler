@@ -172,7 +172,7 @@
                     </div>
                     <div class="card-body">
                         <div class="d-flex gap-2">
-                            <form action="{{ url_for('execute_task', task_id=task.id) }}" method="POST">
+                            <form action="{{ url_for('run_task', task_id=task.id) }}" method="POST">
                                 <button type="submit" class="btn btn-primary">
                                     <i class="fas fa-play-circle me-1"></i>Chạy ngay
                                 </button>

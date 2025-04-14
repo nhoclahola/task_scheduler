@@ -6,6 +6,9 @@ import sys
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from datetime import datetime
 import time
+import uuid
+import werkzeug.utils
+import json
 
 # Thêm thư mục gốc vào sys.path để import các module
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -16,9 +19,18 @@ if parent_dir not in sys.path:
 # Import TaskAPI từ api
 from web.api.task_api import TaskAPI
 
+# Directory for storing uploaded scripts
+UPLOAD_FOLDER = os.path.join(os.path.dirname(parent_dir), "bin", "uploads")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Allowed extensions for script files
+ALLOWED_EXTENSIONS = {'sh', 'py', 'pl', 'js', 'rb', 'bat', 'cmd'}
+
 # Khởi tạo Flask app
 app = Flask(__name__)
 app.secret_key = '42ae8dfd4c3c74024ff5beed3b0c0e76'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 1 * 1024 * 1024  # 1MB limit
 
 # Khởi tạo TaskAPI
 task_api = TaskAPI()
@@ -114,6 +126,22 @@ def create_task():
     elif schedule_type == 2:  # Cron
         task_data['cron_expression'] = request.form.get('cron_expression', '')
     
+    # Xử lý chế độ thực thi
+    exec_mode = int(request.form.get('exec_mode', 0))
+    task_data['exec_mode'] = exec_mode
+    
+    if exec_mode == 1:  # Script mode
+        script_mode = request.form.get('script_mode', 'content')
+        
+        if script_mode == 'file':
+            script_file = request.form.get('script_file', '')
+            if script_file:
+                task_data['script_file'] = script_file
+        else:
+            script_content = request.form.get('script_content', '')
+            if script_content:
+                task_data['script_content'] = script_content
+    
     # Thêm thời gian chạy tối đa nếu có
     max_runtime = request.form.get('max_runtime')
     if max_runtime:
@@ -134,18 +162,39 @@ def create_task():
 def view_task(task_id):
     task = task_api.get_task(task_id)
     if task:
-        # Chuyển đổi timestamp thành chuỗi thời gian dễ đọc
-        if task.get('next_run_time', 0) > 0:
-            next_run = datetime.fromtimestamp(task['next_run_time']).strftime('%Y-%m-%d %H:%M:%S')
-        else:
-            next_run = "Không lên lịch"
+        # Thêm các thông tin định dạng vào task
+        task['creation_time_fmt'] = format_timestamp(task.get('creation_time', 0))
+        task['next_run_time_fmt'] = format_timestamp(task.get('next_run_time', 0))
+        task['last_run_time_fmt'] = format_timestamp(task.get('last_run_time', 0))
         
-        if task.get('last_run_time', 0) > 0:
-            last_run = datetime.fromtimestamp(task['last_run_time']).strftime('%Y-%m-%d %H:%M:%S')
-        else:
-            last_run = "Chưa chạy"
+        # Thêm các tên mô tả
+        task['schedule_type_name'] = get_schedule_type_name(task.get('schedule_type', 0))
+        task['frequency_name'] = get_frequency_name(task.get('frequency', 0))
+        task['dependency_behavior_name'] = get_dependency_behavior_name(task.get('dep_behavior', 0))
         
-        return render_template('task_detail.html', task=task, next_run=next_run, last_run=last_run)
+        # Xử lý mã kết quả exit_code
+        exit_code = task.get('exit_code', -1)
+        if exit_code == 0:
+            task['exit_code_desc'] = f"Thành công ({exit_code})"
+        elif exit_code == -1:
+            if task.get('last_run_time', 0) == 0:
+                task['exit_code_desc'] = "Chưa chạy"
+            else:
+                task['exit_code_desc'] = f"Lỗi ({exit_code})"
+        else:
+            task['exit_code_desc'] = f"Lỗi ({exit_code})"
+        
+        # Lấy danh sách tên của các tác vụ phụ thuộc (nếu có)
+        dependency_names = {}
+        if task.get('dependencies'):
+            for dep_id in task['dependencies']:
+                dep_task = task_api.get_task(dep_id)
+                if dep_task:
+                    dependency_names[dep_id] = dep_task['name']
+                else:
+                    dependency_names[dep_id] = f"Tác vụ {dep_id}"
+        
+        return render_template('task_detail.html', task=task, dependency_names=dependency_names)
     else:
         flash('Không tìm thấy tác vụ với ID này!', 'error')
         return redirect(url_for('index'))
@@ -185,6 +234,22 @@ def update_task(task_id):
         task_data['interval'] = interval_minutes * 60  # Chuyển phút sang giây
     elif schedule_type == 2:  # Cron
         task_data['cron_expression'] = request.form.get('cron_expression', '')
+    
+    # Xử lý chế độ thực thi
+    exec_mode = int(request.form.get('exec_mode', 0))
+    task_data['exec_mode'] = exec_mode
+    
+    if exec_mode == 1:  # Script mode
+        script_mode = request.form.get('script_mode', 'content')
+        
+        if script_mode == 'file':
+            script_file = request.form.get('script_file', '')
+            if script_file:
+                task_data['script_file'] = script_file
+        else:
+            script_content = request.form.get('script_content', '')
+            if script_content:
+                task_data['script_content'] = script_content
     
     # Thêm thời gian chạy tối đa nếu có
     max_runtime = request.form.get('max_runtime')
@@ -282,6 +347,41 @@ def stats():
                           completed_tasks=completed_tasks,
                           tasks_by_status=tasks_by_status,
                           tasks_by_frequency=tasks_by_frequency)
+
+# Hàm kiểm tra xem file có phần mở rộng được cho phép không
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# API để upload file script
+@app.route('/api/upload_script', methods=['POST'])
+def upload_script():
+    if 'script_file' not in request.files:
+        return jsonify({'success': False, 'message': 'Không có file nào được gửi lên'})
+    
+    file = request.files['script_file']
+    
+    if file.filename == '':
+        return jsonify({'success': False, 'message': 'Không có file nào được chọn'})
+    
+    if file and allowed_file(file.filename):
+        # Tạo tên file duy nhất để tránh xung đột
+        filename = str(uuid.uuid4()) + '_' + werkzeug.utils.secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        try:
+            # Lưu file và set quyền thực thi
+            file.save(file_path)
+            os.chmod(file_path, 0o755)  # Thêm quyền thực thi
+            
+            return jsonify({
+                'success': True, 
+                'file_path': file_path,
+                'original_filename': file.filename
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'Lỗi khi lưu file: {str(e)}'})
+    
+    return jsonify({'success': False, 'message': 'Loại file không được hỗ trợ'})
 
 # Xử lý trang lỗi 404
 @app.errorhandler(404)

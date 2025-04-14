@@ -50,9 +50,31 @@
                                 <div class="form-text">Lệnh shell để thực thi</div>
                             </div>
                             <div id="scriptInput" class="mb-3 script-content">
-                                <label for="script_content" class="form-label">Nội dung script <span class="text-danger">*</span></label>
-                                <textarea class="form-control" id="script_content" name="script_content" rows="5">{{ task.script_content if task else '' }}</textarea>
-                                <div class="form-text">Nội dung script shell sẽ được thực thi</div>
+                                <label for="script_mode" class="form-label">Chế độ script</label>
+                                <select class="form-select" id="script_mode" name="script_mode">
+                                    <option value="content" {% if task and not task.script_file %}selected{% endif %}>Nhập nội dung script</option>
+                                    <option value="file" {% if task and task.script_file %}selected{% endif %}>Chọn file script</option>
+                                </select>
+                                
+                                <div id="scriptContentInput" class="mt-2">
+                                    <label for="script_content" class="form-label">Nội dung script <span class="text-danger">*</span></label>
+                                    <textarea class="form-control" id="script_content" name="script_content" rows="5">{{ task.script_content if task else '' }}</textarea>
+                                    <div class="form-text">Nội dung script shell sẽ được thực thi</div>
+                                </div>
+                                
+                                <div id="scriptFileInput" class="mt-2">
+                                    <label for="script_file" class="form-label">Đường dẫn file script <span class="text-danger">*</span></label>
+                                    <div class="input-group">
+                                        <input type="text" class="form-control" id="script_file" name="script_file" 
+                                              value="{{ task.script_file if task else '' }}">
+                                        <button class="btn btn-outline-secondary" type="button" id="uploadButton">
+                                            <i class="fas fa-upload"></i> Tải lên
+                                        </button>
+                                    </div>
+                                    <div class="form-text">Đường dẫn tuyệt đối đến file script hoặc tải lên file mới</div>
+                                    <input type="file" class="d-none" id="fileSelector" accept=".sh,.py,.pl,.js,.bat,.cmd">
+                                    <div id="uploadStatus" class="mt-2"></div>
+                                </div>
                             </div>
                             <div class="mb-3">
                                 <label for="working_dir" class="form-label">Thư mục làm việc</label>
@@ -104,9 +126,9 @@
                                     </select>
                                 </div>
                                 <div class="mb-3">
-                                    <label for="interval" class="form-label">Khoảng thời gian (giây)</label>
+                                    <label for="interval" class="form-label">Khoảng thời gian (phút)</label>
                                     <input type="number" class="form-control" id="interval" name="interval" 
-                                          value="{{ task.interval if task else '86400' }}" min="1">
+                                          value="{{ task.interval // 60 if task and task.interval else '1440' }}" min="1">
                                     <div class="form-text">Khoảng thời gian giữa các lần chạy</div>
                                 </div>
                             </div>
@@ -204,6 +226,24 @@
             // Chế độ script
             document.getElementById('commandInput').style.display = 'none';
             document.getElementById('scriptInput').style.display = 'block';
+            
+            // Cập nhật chế độ script
+            updateScriptModeOptions();
+        }
+    }
+    
+    // Xử lý hiển thị tùy chọn chế độ script
+    function updateScriptModeOptions() {
+        const scriptMode = document.getElementById('script_mode').value;
+        
+        if (scriptMode === 'content') {
+            // Chế độ nhập nội dung script
+            document.getElementById('scriptContentInput').style.display = 'block';
+            document.getElementById('scriptFileInput').style.display = 'none';
+        } else {
+            // Chế độ chọn file script
+            document.getElementById('scriptContentInput').style.display = 'none';
+            document.getElementById('scriptFileInput').style.display = 'block';
         }
     }
     
@@ -211,6 +251,7 @@
     document.addEventListener('DOMContentLoaded', function() {
         const scheduleTypeSelect = document.getElementById('schedule_type');
         const execModeSelect = document.getElementById('exec_mode');
+        const scriptModeSelect = document.getElementById('script_mode');
         
         // Cập nhật ban đầu
         updateScheduleOptions();
@@ -219,6 +260,75 @@
         // Cập nhật khi thay đổi
         scheduleTypeSelect.addEventListener('change', updateScheduleOptions);
         execModeSelect.addEventListener('change', updateExecModeOptions);
+        
+        // Thêm event listener cho script_mode nếu có
+        if (scriptModeSelect) {
+            scriptModeSelect.addEventListener('change', updateScriptModeOptions);
+        }
+        
+        // Xử lý chọn và upload file
+        const fileSelector = document.getElementById('fileSelector');
+        const scriptFileInput = document.getElementById('script_file');
+        const uploadButton = document.getElementById('uploadButton');
+        const uploadStatus = document.getElementById('uploadStatus');
+        
+        if (uploadButton && fileSelector) {
+            uploadButton.addEventListener('click', function() {
+                fileSelector.click();
+            });
+        }
+        
+        if (fileSelector && scriptFileInput) {
+            fileSelector.addEventListener('change', function(e) {
+                if (e.target.files && e.target.files.length > 0) {
+                    const file = e.target.files[0];
+                    
+                    // Hiển thị thông báo đang upload
+                    if (uploadStatus) {
+                        uploadStatus.innerHTML = '<div class="alert alert-info">Đang tải lên file...</div>';
+                    }
+                    
+                    // Tạo form data để upload
+                    const formData = new FormData();
+                    formData.append('script_file', file);
+                    
+                    // Gửi file lên server
+                    fetch('/api/upload_script', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            // Cập nhật trường đường dẫn với đường dẫn file đã upload
+                            scriptFileInput.value = data.file_path;
+                            
+                            // Hiển thị thông báo thành công
+                            if (uploadStatus) {
+                                uploadStatus.innerHTML = '<div class="alert alert-success">' +
+                                    'File <strong>' + data.original_filename + '</strong> đã được tải lên thành công và sẵn sàng sử dụng.' +
+                                    '</div>';
+                            }
+                        } else {
+                            // Hiển thị thông báo lỗi
+                            if (uploadStatus) {
+                                uploadStatus.innerHTML = '<div class="alert alert-danger">' +
+                                    'Lỗi: ' + data.message +
+                                    '</div>';
+                            }
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        if (uploadStatus) {
+                            uploadStatus.innerHTML = '<div class="alert alert-danger">' +
+                                'Lỗi khi tải lên file. Vui lòng thử lại sau.' +
+                                '</div>';
+                        }
+                    });
+                }
+            });
+        }
     });
 </script>
 {% endblock %} 
