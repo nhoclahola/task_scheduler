@@ -279,11 +279,26 @@ def delete_task(task_id):
 # Chạy tác vụ ngay lập tức
 @app.route('/task/<int:task_id>/run', methods=['POST'])
 def run_task(task_id):
+    # Lấy thông tin task trước khi thực thi
+    task = task_api.get_task(task_id)
+    
+    # Kiểm tra xem task có tồn tại không
+    if not task:
+        flash('Không tìm thấy tác vụ với ID này!', 'error')
+        return redirect(url_for('index'))
+    
+    # Kiểm tra xem task có được kích hoạt không
+    if not task.get('enabled', False):
+        flash('Không thể chạy tác vụ đã bị vô hiệu hóa! Vui lòng kích hoạt tác vụ trước khi chạy.', 'error')
+        return redirect(url_for('view_task', task_id=task_id))
+    
+    # Thực thi task
     success = task_api.execute_task(task_id)
     if success:
         flash('Tác vụ đã được kích hoạt thành công!', 'success')
     else:
         flash('Không thể kích hoạt tác vụ. Vui lòng thử lại!', 'error')
+    
     return redirect(url_for('view_task', task_id=task_id))
 
 # Bật/tắt tác vụ
@@ -294,9 +309,16 @@ def toggle_task(task_id):
         flash('Không tìm thấy tác vụ với ID này!', 'error')
         return redirect(url_for('index'))
     
-    # Cập nhật tác vụ với trạng thái đã đảo ngược
-    task_data = task.copy()
-    task_data['enabled'] = not task.get('enabled', True)
+    # Lưu giá trị last_run_time trước khi cập nhật
+    last_run_time = task.get('last_run_time', 0)
+    
+    # Chỉ gửi id và trạng thái enabled đã đảo ngược
+    # Điều này sẽ khiến TaskAPI sử dụng lệnh enable/disable trực tiếp
+    # thay vì xóa và tạo lại task
+    task_data = {
+        'id': task_id,
+        'enabled': not task.get('enabled', True)
+    }
     
     success = task_api.update_task(task_data)
     

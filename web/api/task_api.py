@@ -56,6 +56,10 @@ class TaskAPI:
                 except Exception as e:
                     print(f"Warning: Could not set execute permission on {self.bin_path}: {e}")
             
+            # In thông tin về đường dẫn dữ liệu
+            print(f"Data directory for the task scheduler: {self.data_dir}")
+            print(f"Database file path: {os.path.join(self.data_dir, 'tasks.db')}")
+            
             # Khởi động quá trình tương tác với binary
             self._start_interactive_process()
     
@@ -333,7 +337,7 @@ class TaskAPI:
                     continue
                 
                 # Trích xuất thư mục làm việc
-                dir_match = re.match(r"Working Dir: (.+)", line)
+                dir_match = re.match(r"Working Dir(?:ectory)?: (.+)", line)
                 if dir_match:
                     dir_text = dir_match.group(1)
                     task['working_dir'] = '' if '(default)' in dir_text else dir_text
@@ -343,6 +347,22 @@ class TaskAPI:
                 status_match = re.match(r"Enabled: (.+)", line)
                 if status_match:
                     task['enabled'] = status_match.group(1).lower() == 'yes'
+                    continue
+                
+                # Trích xuất thời gian tạo
+                created_match = re.match(r"Created: (.+)", line)
+                if created_match:
+                    creation_time_text = created_match.group(1)
+                    if creation_time_text != "Unknown":
+                        try:
+                            # Chuyển đổi chuỗi thời gian sang timestamp
+                            dt = datetime.strptime(creation_time_text, "%Y-%m-%d %H:%M:%S")
+                            task['creation_time'] = int(dt.timestamp())
+                        except Exception as e:
+                            print(f"Error parsing creation time: {e}")
+                            task['creation_time'] = 0
+                    else:
+                        task['creation_time'] = 0
                     continue
                 
                 # Trích xuất kiểu lịch trình
@@ -539,7 +559,17 @@ class TaskAPI:
             # Cập nhật tác vụ trong chế độ giả lập
             task_id = task_data.get('id')
             if task_id and task_id in self.tasks:
+                # Lưu giá trị last_run_time trước khi cập nhật
+                last_run_time = self.tasks[task_id].get('last_run_time', 0)
+                
+                # Cập nhật task với dữ liệu mới
                 self.tasks[task_id].update(task_data)
+                
+                # Đảm bảo giữ nguyên last_run_time nếu chỉ thay đổi trạng thái enabled
+                if 'last_run_time' not in task_data and last_run_time > 0:
+                    self.tasks[task_id]['last_run_time'] = last_run_time
+                    print(f"Giữ nguyên last_run_time: {last_run_time} cho task {task_id}")
+                
                 return True
             return False
         
@@ -548,10 +578,35 @@ class TaskAPI:
             print("Error: No task ID provided for update")
             return False
         
-        # Trong C backend, sử dụng lệnh remove và sau đó add lại
+        # Kiểm tra xem đây có phải là yêu cầu bật/tắt task không
+        if len(task_data) == 2 and 'id' in task_data and 'enabled' in task_data:
+            print(f"Chỉ thay đổi trạng thái bật/tắt cho task {task_id}")
+            
+            # Sử dụng lệnh enable hoặc disable trực tiếp thay vì xóa và tạo lại
+            enabled_status = "enable" if task_data['enabled'] else "disable"
+            exit_code, output = self._run_command(f"{enabled_status} {task_id}")
+            
+            if exit_code != 0:
+                print(f"Error changing task status: {output}")
+                return False
+                
+            print(f"Task {task_id} {enabled_status}d successfully")
+            return True
+        
+        # Nếu cần cập nhật nhiều thuộc tính khác, tiếp tục sử dụng cách xóa và tạo lại
+        # Lấy thông tin hiện tại của task trước khi xóa
+        current_task = self.get_task(task_id)
+        if not current_task:
+            print(f"Error: Cannot find task {task_id} to update")
+            return False
+            
+        # Lưu giá trị last_run_time và exit_code từ task hiện tại
+        last_run_time = current_task.get('last_run_time', 0)
+        exit_code_value = current_task.get('exit_code', 0)
+        
         # Đầu tiên, xóa tác vụ cũ
-        exit_code, output = self._run_command(f"remove {task_id}")
-        if exit_code != 0:
+        remove_exit_code, output = self._run_command(f"remove {task_id}")
+        if remove_exit_code != 0:
             print(f"Error removing old task: {output}")
             return False
         
@@ -607,8 +662,8 @@ class TaskAPI:
         
         # Thực thi lệnh
         print(f"Sending update command: {command}")
-        exit_code, output = self._run_command(command)
-        if exit_code != 0:
+        add_exit_code, output = self._run_command(command)
+        if add_exit_code != 0:
             print(f"Error adding updated task: {output}")
             return False
         
@@ -620,6 +675,26 @@ class TaskAPI:
             # Cập nhật trạng thái của tác vụ nếu cần
             if 'enabled' in task_data and not task_data['enabled']:
                 self._run_command(f"disable {new_task_id}")
+            
+            # Nếu last_run_time có tồn tại, áp dụng lại giá trị này vào task mới
+            if last_run_time > 0:
+                # In thông báo log
+                print(f"Preserving last_run_time {last_run_time} for task {new_task_id}")
+                
+                # Sử dụng SQLite trực tiếp để cập nhật giá trị last_run_time và exit_code
+                try:
+                    import sqlite3
+                    db_path = os.path.join(self.data_dir, "tasks.db")
+                    if os.path.exists(db_path):
+                        conn = sqlite3.connect(db_path)
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE tasks SET last_run_time = ?, exit_code = ? WHERE id = ?", 
+                                      (last_run_time, exit_code_value, new_task_id))
+                        conn.commit()
+                        conn.close()
+                        print(f"Successfully updated historical data in database for task {new_task_id}")
+                except Exception as e:
+                    print(f"Error updating historical data in database: {e}")
             
             print(f"Updated task {task_id} with new ID {new_task_id}")
             return True
