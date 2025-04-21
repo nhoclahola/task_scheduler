@@ -70,9 +70,7 @@ bool task_calculate_next_run(Task *task) {
                 // First time? Schedule from now
                 task->next_run_time = now + (task->interval * 60);
             }
-            // Khôi phục lại các giá trị
-            task->last_run_time = original_last_run_time;
-            task->exit_code = original_exit_code;
+            // Không khôi phục lại các giá trị cho SCHEDULE_INTERVAL
             return true;
             
         case SCHEDULE_CRON:
@@ -205,12 +203,16 @@ bool task_calculate_next_run(Task *task) {
             } else {
                 task->next_run_time = now + task->interval;
             }
-            break;
+            // Không khôi phục lại giá trị cho frequency=CUSTOM (thường dùng cho interval)
+            return true;
     }
     
     // Khôi phục lại các giá trị last_run_time và exit_code trước khi trả về
-    task->last_run_time = original_last_run_time;
-    task->exit_code = original_exit_code;
+    // Không khôi phục lại cho SCHEDULE_INTERVAL
+    if (task->schedule_type != SCHEDULE_INTERVAL) {
+        task->last_run_time = original_last_run_time;
+        task->exit_code = original_exit_code;
+    }
     
     return true;
 }

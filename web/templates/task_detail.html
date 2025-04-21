@@ -5,14 +5,28 @@
 {% block content %}
 <div class="card shadow">
     <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-        <h5 class="mb-0"><i class="fas fa-tasks me-2"></i>{{ task.name }}</h5>
-        <div>
-            <a href="{{ url_for('edit_task', task_id=task.id) }}" class="btn btn-light btn-sm">
-                <i class="fas fa-edit me-1"></i>Sửa
+        <h5 class="mb-0 task-title"><i class="fas fa-tasks me-2"></i>{{ task.name }}</h5>
+        <div class="task-actions">
+            <a href="{{ url_for('edit_task', task_id=task.id) }}" class="btn btn-light mb-1 mb-md-0" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Chỉnh sửa tác vụ">
+                <i class="fas fa-edit me-1"></i><span class="action-text">Chỉnh sửa</span>
             </a>
-            <button type="button" class="btn btn-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteTaskModal">
-                <i class="fas fa-trash me-1"></i>Xóa
-            </button>
+            <form action="{{ url_for('toggle_task', task_id=task.id) }}" method="POST" class="d-inline">
+                <button type="submit" class="btn btn-light ms-1 mb-1 mb-md-0" data-bs-toggle="tooltip" data-bs-placement="bottom" title="{% if task.enabled %}Tắt tác vụ{% else %}Bật tác vụ{% endif %}">
+                    <i class="fas {% if task.enabled %}fa-pause{% else %}fa-play{% endif %} me-1"></i><span class="action-text">{% if task.enabled %}Tắt{% else %}Bật{% endif %}</span>
+                </button>
+            </form>
+            {% if task.enabled %}
+            <form action="{{ url_for('run_task', task_id=task.id) }}" method="POST" class="d-inline">
+                <button type="submit" class="btn btn-success ms-1 mb-1 mb-md-0" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Chạy tác vụ ngay lập tức">
+                    <i class="fas fa-play-circle me-1"></i><span class="action-text">Chạy ngay</span>
+                </button>
+            </form>
+            {% endif %}
+            <form action="{{ url_for('delete_task', task_id=task.id) }}" method="POST" class="d-inline">
+                <button type="submit" class="btn btn-danger ms-1 mb-1 mb-md-0" onclick="return confirm('Bạn có chắc chắn muốn xóa tác vụ này?')" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Xóa tác vụ này">
+                    <i class="fas fa-trash me-1"></i><span class="action-text">Xóa</span>
+                </button>
+            </form>
         </div>
     </div>
     <div class="card-body">
@@ -37,9 +51,9 @@
                                 <th>Trạng thái:</th>
                                 <td>
                                     {% if task.enabled %}
-                                    <span class="badge bg-success">Kích hoạt</span>
+                                        <span class="badge bg-success">Kích hoạt</span>
                                     {% else %}
-                                    <span class="badge bg-danger">Vô hiệu hóa</span>
+                                        <span class="badge bg-secondary">Vô hiệu</span>
                                     {% endif %}
                                 </td>
                             </tr>
@@ -164,37 +178,6 @@
                         </table>
                     </div>
                 </div>
-                
-                <!-- Hành động -->
-                <div class="card mb-4">
-                    <div class="card-header bg-light">
-                        <h6 class="mb-0"><i class="fas fa-cogs me-2"></i>Hành động</h6>
-                    </div>
-                    <div class="card-body">
-                        <div class="d-flex gap-2">
-                            <form action="{{ url_for('run_task', task_id=task.id) }}" method="POST">
-                                {% if task.enabled %}
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="fas fa-play-circle me-1"></i>Chạy ngay
-                                </button>
-                                {% else %}
-                                <button type="button" class="btn btn-primary disabled" 
-                                        data-bs-toggle="tooltip" data-bs-placement="top" 
-                                        title="Task đã bị vô hiệu hóa. Vui lòng kích hoạt task trước khi chạy.">
-                                    <i class="fas fa-play-circle me-1"></i>Chạy ngay
-                                </button>
-                                {% endif %}
-                            </form>
-                            
-                            <form action="{{ url_for('toggle_task', task_id=task.id) }}" method="POST">
-                                <button type="submit" class="btn {% if task.enabled %}btn-warning{% else %}btn-success{% endif %}">
-                                    <i class="fas {% if task.enabled %}fa-pause{% else %}fa-play{% endif %} me-1"></i>
-                                    {% if task.enabled %}Vô hiệu hóa{% else %}Kích hoạt{% endif %}
-                                </button>
-                            </form>
-                        </div>
-                    </div>
-                </div>
             </div>
         </div>
     </div>
@@ -207,26 +190,16 @@
         </div>
     </div>
 </div>
+{% endblock %}
 
-<!-- Delete Task Modal -->
-<div class="modal fade" id="deleteTaskModal" tabindex="-1" aria-labelledby="deleteTaskModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header bg-danger text-white">
-                <h5 class="modal-title" id="deleteTaskModalLabel">Xác nhận xóa tác vụ</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <p>Bạn có chắc chắn muốn xóa tác vụ <strong>{{ task.name }}</strong>?</p>
-                <p class="text-danger"><i class="fas fa-exclamation-triangle me-2"></i>Thao tác này không thể hoàn tác!</p>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
-                <form action="{{ url_for('delete_task', task_id=task.id) }}" method="POST">
-                    <button type="submit" class="btn btn-danger">Xóa</button>
-                </form>
-            </div>
-        </div>
-    </div>
-</div>
+{% block scripts %}
+<script>
+    // Khởi tạo tooltips
+    document.addEventListener('DOMContentLoaded', function() {
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+    });
+</script>
 {% endblock %} 

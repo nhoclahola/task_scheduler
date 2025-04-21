@@ -20,8 +20,8 @@ if parent_dir not in sys.path:
 from web.api.task_api import TaskAPI
 
 # Directory for storing uploaded scripts
-UPLOAD_FOLDER = os.path.join(os.path.dirname(parent_dir), "bin", "uploads")
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+SCRIPTS_FOLDER = os.path.join(parent_dir, "bin", "scripts")
+os.makedirs(SCRIPTS_FOLDER, exist_ok=True)
 
 # Allowed extensions for script files
 ALLOWED_EXTENSIONS = {'sh', 'py', 'pl', 'js', 'rb', 'bat', 'cmd'}
@@ -29,7 +29,7 @@ ALLOWED_EXTENSIONS = {'sh', 'py', 'pl', 'js', 'rb', 'bat', 'cmd'}
 # Khởi tạo Flask app
 app = Flask(__name__)
 app.secret_key = '42ae8dfd4c3c74024ff5beed3b0c0e76'
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['UPLOAD_FOLDER'] = SCRIPTS_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 1 * 1024 * 1024  # 1MB limit
 
 # Khởi tạo TaskAPI
@@ -104,7 +104,9 @@ def index():
 # Hiển thị form tạo tác vụ mới
 @app.route('/task/new')
 def new_task():
-    return render_template('task_form.html', task=None, action="create")
+    # Lấy danh sách các tác vụ hiện có để cho phép chọn trong danh sách phụ thuộc
+    available_tasks = task_api.get_all_tasks()
+    return render_template('task_form.html', task=None, action="create", available_tasks=available_tasks)
 
 # Tạo tác vụ mới
 @app.route('/task/create', methods=['POST'])
@@ -113,7 +115,8 @@ def create_task():
         'name': request.form.get('name', ''),
         'command': request.form.get('command', ''),
         'working_dir': request.form.get('working_dir', ''),
-        'enabled': True
+        'enabled': True,
+        'dep_behavior': int(request.form.get('dep_behavior', 0))
     }
     
     # Xử lý kiểu lịch trình
@@ -147,15 +150,38 @@ def create_task():
     if max_runtime:
         task_data['max_runtime'] = int(max_runtime)
     
+    # Xử lý các tác vụ phụ thuộc
+    dependencies = request.form.getlist('dependencies')
+    if dependencies:
+        # Chuyển đổi từ danh sách chuỗi sang danh sách số nguyên
+        dependencies = [int(dep_id) for dep_id in dependencies if dep_id.isdigit()]
+        # Giới hạn số lượng phụ thuộc tối đa
+        dependencies = dependencies[:10]
+        task_data['dependencies'] = dependencies
+    else:
+        task_data['dependencies'] = []
+    
     # Thêm tác vụ
     task_id = task_api.add_task(task_data)
     
     if task_id > 0:
+        # Nếu tác vụ được tạo thành công và có phụ thuộc, thêm chúng
+        if dependencies:
+            for dep_id in dependencies:
+                task_api.add_dependency(task_id, dep_id)
+                
+        # Nếu có hành vi phụ thuộc được chỉ định
+        if 'dep_behavior' in request.form and dependencies:
+            behavior = int(request.form.get('dep_behavior', 0))
+            task_api.set_dependency_behavior(task_id, behavior)
+            
         flash('Tác vụ đã được tạo thành công!', 'success')
         return redirect(url_for('view_task', task_id=task_id))
     else:
         flash('Không thể tạo tác vụ. Vui lòng thử lại!', 'error')
-        return render_template('task_form.html', task=task_data, action="create")
+        # Lấy danh sách các tác vụ khác cho phần phụ thuộc
+        available_tasks = task_api.get_all_tasks()
+        return render_template('task_form.html', task=task_data, action="create", available_tasks=available_tasks)
 
 # Xem chi tiết tác vụ
 @app.route('/task/<int:task_id>')
@@ -204,7 +230,9 @@ def view_task(task_id):
 def edit_task(task_id):
     task = task_api.get_task(task_id)
     if task:
-        return render_template('task_form.html', task=task, action="update")
+        # Lấy danh sách các tác vụ khác để thiết lập phụ thuộc
+        available_tasks = task_api.get_all_tasks()
+        return render_template('task_form.html', task=task, action="update", available_tasks=available_tasks)
     else:
         flash('Không tìm thấy tác vụ với ID này!', 'error')
         return redirect(url_for('index'))
@@ -222,7 +250,8 @@ def update_task(task_id):
         'name': request.form.get('name', ''),
         'command': request.form.get('command', ''),
         'working_dir': request.form.get('working_dir', ''),
-        'enabled': task.get('enabled', True)
+        'enabled': task.get('enabled', True),
+        'dep_behavior': int(request.form.get('dep_behavior', 0))
     }
     
     # Xử lý kiểu lịch trình
@@ -256,15 +285,104 @@ def update_task(task_id):
     if max_runtime:
         task_data['max_runtime'] = int(max_runtime)
     
-    # Cập nhật tác vụ
-    success = task_api.update_task(task_data)
+    # Xử lý các tác vụ phụ thuộc
+    dependencies = request.form.getlist('dependencies')
+    dependency_changed = False
+    
+    if dependencies:
+        # Chuyển đổi từ danh sách chuỗi sang danh sách số nguyên
+        dependencies = [int(dep_id) for dep_id in dependencies if dep_id.isdigit()]
+        # Giới hạn số lượng phụ thuộc tối đa
+        dependencies = dependencies[:10]
+        
+        # Lấy danh sách phụ thuộc hiện tại
+        current_task = task_api.get_task(task_id)
+        current_dependencies = current_task.get('dependencies', []) if current_task else []
+        
+        # Kiểm tra xem có sự thay đổi phụ thuộc không
+        if sorted(dependencies) != sorted(current_dependencies):
+            dependency_changed = True
+            
+            # Xác định phụ thuộc cần thêm và xóa
+            deps_to_add = [dep_id for dep_id in dependencies if dep_id not in current_dependencies]
+            deps_to_remove = [dep_id for dep_id in current_dependencies if dep_id not in dependencies]
+            
+            # Xóa các phụ thuộc cũ
+            for dep_id in deps_to_remove:
+                task_api.remove_dependency(task_id, dep_id)
+                
+            # Thêm các phụ thuộc mới
+            for dep_id in deps_to_add:
+                task_api.add_dependency(task_id, dep_id)
+        
+        # Lưu dependencies vào task_data nhưng không gửi trong cập nhật
+        task_data['dependencies'] = dependencies
+    else:
+        # Nếu không có phụ thuộc mới, xóa tất cả phụ thuộc hiện tại
+        current_task = task_api.get_task(task_id)
+        current_dependencies = current_task.get('dependencies', []) if current_task else []
+        
+        if current_dependencies:
+            dependency_changed = True
+            
+            for dep_id in current_dependencies:
+                task_api.remove_dependency(task_id, dep_id)
+        
+        # Lưu dependencies vào task_data nhưng không gửi trong cập nhật
+        task_data['dependencies'] = []
+    
+    # Cập nhật hành vi phụ thuộc nếu có
+    behavior_changed = False
+    if 'dep_behavior' in request.form:
+        behavior = int(request.form.get('dep_behavior', 0))
+        current_behavior = current_task.get('dep_behavior', 0) if current_task else 0
+        
+        # Chỉ cập nhật nếu giá trị thay đổi
+        if behavior != current_behavior:
+            behavior_changed = True
+            task_api.set_dependency_behavior(task_id, behavior)
+        
+        # Không cần lưu dep_behavior vào task_data khi đã cập nhật trực tiếp
+    
+    # Tạo một bản sao của task_data không chứa dependencies và dep_behavior
+    # để tránh việc cập nhật lại các thông tin phụ thuộc đã được cập nhật riêng
+    update_task_data = dict(task_data)
+    if 'dependencies' in update_task_data:
+        del update_task_data['dependencies']
+    if 'dep_behavior' in update_task_data:
+        del update_task_data['dep_behavior']
+    
+    # Kiểm tra xem có các trường khác cần cập nhật không
+    # Lấy lại current_task nếu cần
+    if not current_task:
+        current_task = task_api.get_task(task_id)
+    
+    # Kiểm tra các trường còn lại ngoài 'id' có thay đổi không
+    has_other_changes = False
+    for key, value in update_task_data.items():
+        if key != 'id' and (key not in current_task or current_task.get(key) != value):
+            has_other_changes = True
+            break
+    
+    # Chỉ cập nhật tác vụ nếu có thông tin khác cần cập nhật
+    success = True
+    if has_other_changes:
+        success = task_api.update_task(update_task_data)
     
     if success:
-        flash('Tác vụ đã được cập nhật thành công!', 'success')
-        return redirect(url_for('index'))
+        # Thông báo dựa trên loại thay đổi
+        if has_other_changes:
+            flash('Tác vụ đã được cập nhật thành công!', 'success')
+        elif dependency_changed or behavior_changed:
+            flash('Phụ thuộc của tác vụ đã được cập nhật thành công!', 'success')
+        else:
+            flash('Không có thay đổi nào được thực hiện!', 'info')
+        return redirect(url_for('view_task', task_id=task_id))
     else:
         flash('Không thể cập nhật tác vụ. Vui lòng thử lại!', 'error')
-        return render_template('task_form.html', task=task_data, action="update")
+        # Lấy danh sách các tác vụ khác cho phần phụ thuộc
+        available_tasks = task_api.get_all_tasks()
+        return render_template('task_form.html', task=task_data, action="update", available_tasks=available_tasks)
 
 # Xóa tác vụ
 @app.route('/task/<int:task_id>/delete', methods=['POST'])

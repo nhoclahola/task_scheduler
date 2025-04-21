@@ -101,6 +101,261 @@ document.addEventListener('DOMContentLoaded', function() {
         
         return result.join(', ');
     };
+
+    // Xử lý upload file script
+    const fileUpload = document.getElementById('script_file_upload');
+    if (fileUpload) {
+        fileUpload.addEventListener('change', function(e) {
+            const uploadStatus = document.getElementById('upload_status');
+            const scriptFileInput = document.getElementById('script_file');
+            
+            if (!e.target.files || e.target.files.length === 0) {
+                return;
+            }
+            
+            const file = e.target.files[0];
+            if (uploadStatus) {
+                uploadStatus.innerHTML = '<div class="alert alert-info">Đang tải lên file...</div>';
+            }
+            
+            // Tạo FormData để upload
+            const formData = new FormData();
+            formData.append('script_file', file);
+            
+            // Upload file qua API
+            fetch('/api/upload_script', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    if (scriptFileInput) {
+                        scriptFileInput.value = data.file_path;
+                    }
+                    
+                    if (uploadStatus) {
+                        uploadStatus.innerHTML = `
+                            <div class="alert alert-success">
+                                <i class="fas fa-check-circle me-2"></i>
+                                File <strong>${data.original_filename}</strong> đã được tải lên thành công.
+                                <div class="mt-1 small">Đường dẫn: ${data.file_path}</div>
+                            </div>`;
+                    }
+                } else {
+                    if (uploadStatus) {
+                        uploadStatus.innerHTML = `
+                            <div class="alert alert-danger">
+                                <i class="fas fa-times-circle me-2"></i>
+                                Lỗi: ${data.message}
+                            </div>`;
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                if (uploadStatus) {
+                    uploadStatus.innerHTML = `
+                        <div class="alert alert-danger">
+                            <i class="fas fa-times-circle me-2"></i>
+                            Lỗi khi tải lên file. Vui lòng thử lại sau.
+                        </div>`;
+                }
+            });
+        });
+    }
+    
+    // Xử lý hiển thị/ẩn các phần tùy thuộc vào loại lịch trình
+    const setupScheduleTypeHandlers = function() {
+        const scheduleTypeRadios = document.querySelectorAll('input[name="schedule_type"]');
+        const intervalSection = document.getElementById('interval_section');
+        const cronSection = document.getElementById('cron_section');
+        
+        if (scheduleTypeRadios.length && intervalSection && cronSection) {
+            scheduleTypeRadios.forEach(radio => {
+                radio.addEventListener('change', function() {
+                    // Ẩn tất cả các section trước
+                    intervalSection.classList.add('d-none');
+                    cronSection.classList.add('d-none');
+                    
+                    // Hiển thị section phù hợp
+                    if (this.value === '1') {
+                        intervalSection.classList.remove('d-none');
+                    } else if (this.value === '2') {
+                        cronSection.classList.remove('d-none');
+                    }
+                });
+            });
+        }
+    };
+    
+    // Xử lý hiển thị/ẩn các phần tùy thuộc vào chế độ thực thi
+    const setupExecModeHandlers = function() {
+        const execModeRadios = document.querySelectorAll('input[name="exec_mode"]');
+        const commandSection = document.getElementById('command_section');
+        const scriptSection = document.getElementById('script_section');
+        
+        if (execModeRadios.length && commandSection && scriptSection) {
+            execModeRadios.forEach(radio => {
+                radio.addEventListener('change', function() {
+                    if (this.value === '0') {
+                        commandSection.classList.remove('d-none');
+                        scriptSection.classList.add('d-none');
+                    } else {
+                        commandSection.classList.add('d-none');
+                        scriptSection.classList.remove('d-none');
+                    }
+                });
+            });
+        }
+    };
+    
+    // Xử lý hiển thị/ẩn các phần tùy thuộc vào chế độ script
+    const setupScriptModeHandlers = function() {
+        const scriptModeRadios = document.querySelectorAll('input[name="script_mode"]');
+        const scriptContentSection = document.getElementById('script_content_section');
+        const scriptFileSection = document.getElementById('script_file_section');
+        
+        if (scriptModeRadios.length && scriptContentSection && scriptFileSection) {
+            scriptModeRadios.forEach(radio => {
+                radio.addEventListener('change', function() {
+                    if (this.value === 'content') {
+                        scriptContentSection.classList.remove('d-none');
+                        scriptFileSection.classList.add('d-none');
+                    } else {
+                        scriptContentSection.classList.add('d-none');
+                        scriptFileSection.classList.remove('d-none');
+                    }
+                });
+            });
+        }
+    };
+    
+    // Thiết lập các handler
+    setupScheduleTypeHandlers();
+    setupExecModeHandlers();
+    setupScriptModeHandlers();
+
+    // Xử lý vị trí dropdown trong bảng có cuộn
+    const taskTableContainer = document.querySelector('.task-table-container');
+    if (taskTableContainer) {
+        // Đặt chiều cao động dựa trên kích thước màn hình
+        function adjustTableHeight() {
+            const windowHeight = window.innerHeight;
+            const headerHeight = document.querySelector('header')?.offsetHeight || 60;
+            const footerHeight = document.querySelector('footer')?.offsetHeight || 0;
+            const cardHeaderHeight = taskTableContainer.closest('.card')?.querySelector('.card-header')?.offsetHeight || 0;
+            const offset = 60; // Offset bổ sung cho margins và paddings
+            
+            const calculatedHeight = windowHeight - headerHeight - footerHeight - cardHeaderHeight - offset;
+            const minHeight = 400; // Chiều cao tối thiểu
+            const maxHeight = 800; // Chiều cao tối đa
+            
+            const finalHeight = Math.max(minHeight, Math.min(calculatedHeight, maxHeight));
+            taskTableContainer.style.height = `${finalHeight}px`;
+        }
+        
+        // Điều chỉnh chiều cao ban đầu và khi thay đổi kích thước cửa sổ
+        adjustTableHeight();
+        window.addEventListener('resize', adjustTableHeight);
+    }
+    
+    // Xử lý tất cả các dropdown trong bảng
+    const actionDropdowns = document.querySelectorAll('.actions-cell .dropdown');
+    
+    if (actionDropdowns.length > 0) {
+        actionDropdowns.forEach(dropdown => {
+            const dropdownToggle = dropdown.querySelector('.dropdown-toggle');
+            const dropdownMenu = dropdown.querySelector('.dropdown-menu');
+            
+            if (dropdownToggle && dropdownMenu) {
+                // Lắng nghe sự kiện khi dropdown được hiển thị
+                dropdownToggle.addEventListener('click', function(e) {
+                    // Ngăn chặn sự kiện mặc định
+                    e.stopPropagation();
+                    
+                    // Đặt lại vị trí của dropdown menu
+                    setTimeout(() => {
+                        const rect = dropdownToggle.getBoundingClientRect();
+                        const tableContainer = dropdown.closest('.task-table-container');
+                        const tableRect = tableContainer ? tableContainer.getBoundingClientRect() : document.body.getBoundingClientRect();
+                        
+                        // Đảm bảo dropdown menu được hiển thị trong viewport
+                        const dropdownWidth = 220; // Độ rộng ước tính của dropdown menu
+                        
+                        // Kiểm tra xem dropdown có bị tràn ra khỏi bảng không
+                        const rightEdge = rect.left + dropdownWidth;
+                        const viewportWidth = window.innerWidth;
+                        
+                        if (rightEdge > viewportWidth) {
+                            // Nếu tràn ra bên phải viewport, đặt menu ở bên trái
+                            dropdownMenu.style.left = 'auto';
+                            dropdownMenu.style.right = '0';
+                        } else if (rect.left < tableRect.left) {
+                            // Nếu tràn ra bên trái bảng, đặt menu ở bên phải
+                            dropdownMenu.style.left = '0';
+                            dropdownMenu.style.right = 'auto';
+                        } else {
+                            // Mặc định, đặt menu ở bên phải cùa nút
+                            dropdownMenu.style.left = '0';
+                            dropdownMenu.style.right = 'auto';
+                        }
+                        
+                        // Xác định vị trí theo chiều dọc
+                        const menuHeight = dropdownMenu.offsetHeight;
+                        const spaceBelow = window.innerHeight - rect.bottom;
+                        
+                        if (spaceBelow < menuHeight && rect.top > menuHeight) {
+                            // Nếu không đủ không gian bên dưới nhưng đủ không gian bên trên
+                            dropdownMenu.style.top = 'auto';
+                            dropdownMenu.style.bottom = '100%';
+                            dropdownMenu.classList.add('dropdown-menu-up');
+                        } else {
+                            // Mặc định, hiển thị bên dưới
+                            dropdownMenu.style.top = '100%';
+                            dropdownMenu.style.bottom = 'auto';
+                            dropdownMenu.classList.remove('dropdown-menu-up');
+                        }
+                        
+                        // Đảm bảo menu không bị chìm xuống dưới viewport
+                        const maxHeight = window.innerHeight - rect.bottom - 10;
+                        if (menuHeight > maxHeight && maxHeight > 100) {
+                            dropdownMenu.style.maxHeight = maxHeight + 'px';
+                            dropdownMenu.style.overflowY = 'auto';
+                        }
+                    }, 0);
+                });
+                
+                // Xử lý khi người dùng cuộn bảng
+                const tableContainer = dropdown.closest('.task-table-container');
+                if (tableContainer) {
+                    tableContainer.addEventListener('scroll', function() {
+                        // Đóng tất cả các dropdown đang mở khi cuộn
+                        const openDropdown = tableContainer.querySelector('.dropdown-menu.show');
+                        if (openDropdown) {
+                            const bsDropdown = bootstrap.Dropdown.getInstance(openDropdown.previousElementSibling);
+                            if (bsDropdown) {
+                                bsDropdown.hide();
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    }
+    
+    // Xử lý sự kiện click bên ngoài để đóng dropdown
+    document.addEventListener('click', function(e) {
+        const openDropdowns = document.querySelectorAll('.dropdown-menu.show');
+        openDropdowns.forEach(dropdown => {
+            if (!dropdown.contains(e.target)) {
+                const bsDropdown = bootstrap.Dropdown.getInstance(dropdown.previousElementSibling);
+                if (bsDropdown) {
+                    bsDropdown.hide();
+                }
+            }
+        });
+    });
 });
 
 // Xử lý AJAX form submission (nếu cần trong tương lai)

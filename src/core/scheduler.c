@@ -12,6 +12,7 @@
 
 #define INITIAL_CAPACITY 10
 #define DB_FILENAME "tasks.db"
+#define MAX_TASKS_TO_EXECUTE 100
 
 // Thread function declaration
 static void* scheduler_thread_func(void *arg);
@@ -495,111 +496,132 @@ bool scheduler_sync(Scheduler *scheduler) {
 
 // Thread function for the scheduler
 static void* scheduler_thread_func(void *arg) {
-    Scheduler *scheduler = (Scheduler*)arg;
-    if (!scheduler) {
-        return NULL;
-    }
+    Scheduler *scheduler = (Scheduler *)arg;
+    char log_buffer[256];
+    time_t current_time;
     
-    log_message(LOG_INFO, "Scheduler thread started");
+    // Tạo cấu trúc để lưu trữ thông tin về các tác vụ sẽ thực thi
+    typedef struct {
+        Task task;           // Bản sao của tác vụ
+        int original_index;  // Vị trí ban đầu trong danh sách tác vụ
+    } TaskExecutionInfo;
     
-    // Thêm biến lưu thời điểm khởi động
-    time_t startup_time = time(NULL);
-    // Thêm biến để kiểm tra trạng thái khởi động đầu tiên
-    bool is_first_run = true;
+    TaskExecutionInfo tasks_to_execute[MAX_TASKS_TO_EXECUTE];
+    int num_tasks_to_execute;
+    
+    log_message(LOG_INFO, "Scheduler thread started.");
     
     while (scheduler->running) {
-        time_t now = time(NULL);
+        num_tasks_to_execute = 0;
+        current_time = time(NULL);
         
+        // Khóa mutex trước khi truy cập danh sách tác vụ
         pthread_mutex_lock(&scheduler->lock);
         
-        // Khi mới khởi động, thực hiện kiểm tra và cập nhật tất cả task quá hạn
-        if (is_first_run) {
-            for (int i = 0; i < scheduler->task_count; i++) {
-                Task *task = &scheduler->tasks[i];
-                
-                // Nếu task đã quá hạn, cập nhật lại thời gian chạy tiếp theo
-                if (task->enabled && task->next_run_time > 0 && task->next_run_time < startup_time) {
-                    log_message(LOG_INFO, "Task %d (%s) was scheduled in the past. Rescheduling.", 
-                              task->id, task->name);
-                    
-                    // Cập nhật lại thời gian chạy tiếp theo dựa trên lịch trình
-                    task_calculate_next_run(task);
-                    
-                    // Cập nhật vào database
-                    db_update_task(task);
-                }
-            }
-            
-            // Đánh dấu đã thực hiện lần kiểm tra đầu tiên
-            is_first_run = false;
-        }
-        
-        // Check for tasks that need to be executed
+        // Kiểm tra các tác vụ quá hạn
         for (int i = 0; i < scheduler->task_count; i++) {
             Task *task = &scheduler->tasks[i];
             
-            // Đảm bảo task phải enabled và next_run_time phải > 0 và đã đến thời gian chạy
-            if (task->enabled && task->next_run_time > 0 && task->next_run_time <= now) {
-                // Check if dependencies are satisfied for scheduled execution
-                if (task->dependency_count > 0) {
-                    if (!check_dependencies_satisfied(scheduler, task)) {
-                        log_message(LOG_INFO, "Skipping task %d: dependencies not satisfied", task->id);
-                        
-                        // Reschedule for later (add 5 minutes and try again)
-                        task->next_run_time = now + 300;
-                        continue;
+            // Bỏ qua các tác vụ đã chạy và không phải định kỳ
+            if (!task->enabled || 
+                (task->last_run_time > 0 && task->frequency == ONCE) ||
+                (task->last_run_time > 0 && task->schedule_type == SCHEDULE_MANUAL)) {
+                continue;
+            }
+            
+            // Kiểm tra các tác vụ đến thời gian chạy
+            if (task->next_run_time <= current_time) {
+                // Kiểm tra xem các phụ thuộc của tác vụ đã được thỏa mãn chưa
+                if (check_dependencies_satisfied(scheduler, task)) {
+                    log_message(LOG_DEBUG, "Task ID %d đến thời gian chạy.", task->id);
+                    
+                    // Sao chép tác vụ vào mảng tạm thời để thực thi sau khi mở khóa mutex
+                    if (num_tasks_to_execute < MAX_TASKS_TO_EXECUTE) {
+                        memcpy(&(tasks_to_execute[num_tasks_to_execute].task), task, sizeof(Task));
+                        tasks_to_execute[num_tasks_to_execute].original_index = i;
+                        num_tasks_to_execute++;
+                    } else {
+                        log_message(LOG_WARNING, "Đạt đến giới hạn số lượng tác vụ cần thực thi.");
+                        break;
                     }
-                }
-                
-                // Release lock during execution to avoid blocking
-                pthread_mutex_unlock(&scheduler->lock);
-                
-                log_message(LOG_INFO, "Running task: ID=%d, Name=%s", task->id, task->name);
-                
-                // Execute based on mode
-                if (task->exec_mode == EXEC_SCRIPT) {
-                    execute_task_with_script(scheduler, task);
+                    
+                    // Không cần cập nhật thời gian chạy tiếp theo ở đây nữa
+                    // Vì nó sẽ được cập nhật trong task_mark_executed sau khi thực thi
+                    // Chỉ ghi nhật ký cho mục đích gỡ lỗi
+                    if (task->frequency != ONCE) {
+                        log_message(LOG_DEBUG, "Tác vụ ID %d là định kỳ. Sẽ được lên lịch lại sau khi thực thi.", 
+                                task->id);
+                    }
                 } else {
-                    // Execute the command
-                    int exit_code = 0;
+                    log_message(LOG_DEBUG, "Tác vụ ID %d đến thời gian chạy nhưng các phụ thuộc chưa thỏa mãn.", task->id);
+                }
+            }
+        }
+        
+        // Mở khóa mutex sau khi đã sao chép các tác vụ cần thiết
+        pthread_mutex_unlock(&scheduler->lock);
+        
+        // Thực thi các tác vụ được sao chép sau khi đã mở khóa mutex
+        for (int i = 0; i < num_tasks_to_execute; i++) {
+            Task *task = &(tasks_to_execute[i].task);
+            int task_id = task->id;  // Lưu ID của tác vụ để tìm kiếm sau này
+            int exit_code = 0;
+            
+            log_message(LOG_INFO, "Thực thi tác vụ ID %d: %s", task_id, task->name);
+            
+            // Thực thi tác vụ dựa vào chế độ
+            if (task->exec_mode == EXEC_SCRIPT) {
+                // Tạo script tạm thời và thực thi
+                char temp_path[512];
+                if (task_prepare_script(task, temp_path, sizeof(temp_path))) {
                     run_command_with_timeout(
-                        task->command,
+                        temp_path,
                         task->working_dir[0] ? task->working_dir : NULL,
                         task->max_runtime,
                         &exit_code
                     );
                     
-                    // Reacquire lock
-                    pthread_mutex_lock(&scheduler->lock);
-                    
-                    // Check if the task still exists
-                    if (i < scheduler->task_count && scheduler->tasks[i].id == task->id) {
-                        // Update task execution status
-                        task_mark_executed(&scheduler->tasks[i], exit_code);
-                        
-                        // Update in database
-                        db_update_task(&scheduler->tasks[i]);
-                        
-                        log_message(LOG_INFO, "Task completed: ID=%d, Name=%s, Exit code=%d", 
-                                  task->id, task->name, exit_code);
-                    }
-                    
-                    // Continue to next iteration without unlocking (we already have the lock)
-                    continue;
+                    // Xóa file tạm sau khi thực thi
+                    unlink(temp_path);
+                } else {
+                    log_message(LOG_ERROR, "Failed to prepare script for task %d", task_id);
                 }
-                
-                // Reacquire lock after script execution
-                pthread_mutex_lock(&scheduler->lock);
+            } else {
+                // Thực thi lệnh shell
+                run_command_with_timeout(
+                    task->command,
+                    task->working_dir[0] ? task->working_dir : NULL,
+                    task->max_runtime,
+                    &exit_code
+                );
             }
+            
+            // Khóa mutex để cập nhật trạng thái tác vụ trong danh sách chính
+            pthread_mutex_lock(&scheduler->lock);
+            
+            // Tìm lại tác vụ trong danh sách vì nó có thể đã thay đổi
+            int index = find_task_index(scheduler, task_id);
+            if (index != -1) {
+                // Cập nhật trạng thái thực thi
+                task_mark_executed(&scheduler->tasks[index], exit_code);
+                
+                // Cập nhật trong database
+                db_update_task(&scheduler->tasks[index]);
+                
+                log_message(LOG_INFO, "Task completed: ID=%d, Name=%s, Exit code=%d", 
+                           task_id, task->name, exit_code);
+            } else {
+                log_message(LOG_WARNING, "Task ID %d không còn tồn tại trong scheduler sau khi thực thi", task_id);
+            }
+            
+            pthread_mutex_unlock(&scheduler->lock);
         }
         
-        pthread_mutex_unlock(&scheduler->lock);
-        
-        // Sleep for check interval
+        // Ngủ trong khoảng thời gian check_interval
         sleep(scheduler->check_interval);
     }
     
-    log_message(LOG_INFO, "Scheduler thread stopped");
+    log_message(LOG_INFO, "Scheduler thread stopped.");
     return NULL;
 }
 
@@ -625,75 +647,78 @@ static bool scheduler_resize(Scheduler *scheduler, int new_capacity) {
 
 // Helper function to find a task by ID
 static int find_task_index(Scheduler *scheduler, int task_id) {
-    if (!scheduler) {
-        return -1;
-    }
-    
     for (int i = 0; i < scheduler->task_count; i++) {
         if (scheduler->tasks[i].id == task_id) {
             return i;
         }
     }
-    
     return -1;
 }
 
 // Helper function to check if dependencies are satisfied
 static bool check_dependencies_satisfied(Scheduler *scheduler, const Task *task) {
-    if (!scheduler || !task) {
-        return false;
-    }
-    
-    // No dependencies? Always satisfied
+    // Nếu không có phụ thuộc nào, mặc định là thỏa mãn
     if (task->dependency_count == 0) {
         return true;
     }
     
-    // Track success and completion counts
-    int success_count = 0;
-    int completion_count = 0;
-    
-    // Check each dependency
+    // Kiểm tra từng phụ thuộc
     for (int i = 0; i < task->dependency_count; i++) {
         int dep_id = task->dependencies[i];
+        bool found = false;
         
-        // Find the dependency
-        int dep_idx = find_task_index(scheduler, dep_id);
-        if (dep_idx < 0) {
-            log_message(LOG_WARNING, "Dependency %d not found for task %d", dep_id, task->id);
-            continue;
+        // Tìm tác vụ phụ thuộc trong danh sách
+        for (int j = 0; j < scheduler->task_count; j++) {
+            if (scheduler->tasks[j].id == dep_id) {
+                found = true;
+                
+                // Kiểm tra trạng thái phụ thuộc dựa trên hành vi đã xác định
+                switch (task->dep_behavior) {
+                    case DEP_ANY_SUCCESS:
+                        if (scheduler->tasks[j].last_run_time > 0 && scheduler->tasks[j].exit_code == 0) {
+                            return true; // Ít nhất một task thành công
+                        }
+                        break;
+                        
+                    case DEP_ALL_SUCCESS:
+                        if (scheduler->tasks[j].last_run_time <= 0 || scheduler->tasks[j].exit_code != 0) {
+                            return false; // Cần tất cả task thành công
+                        }
+                        break;
+                        
+                    case DEP_ANY_COMPLETION:
+                        if (scheduler->tasks[j].last_run_time > 0) {
+                            return true; // Ít nhất một task hoàn thành
+                        }
+                        break;
+                        
+                    case DEP_ALL_COMPLETION:
+                        if (scheduler->tasks[j].last_run_time <= 0) {
+                            return false; // Cần tất cả task hoàn thành
+                        }
+                        break;
+                        
+                    default:
+                        return false; // Hành vi không xác định
+                }
+                
+                break;
+            }
         }
         
-        Task *dep_task = &scheduler->tasks[dep_idx];
-        
-        // Check if it has ever run
-        if (dep_task->last_run_time > 0) {
-            completion_count++;
-            
-            // Check success (exit code 0)
-            if (dep_task->exit_code == 0) {
-                success_count++;
-            }
+        // Nếu không tìm thấy tác vụ phụ thuộc, coi như phụ thuộc không thỏa mãn
+        if (!found) {
+            return false;
         }
     }
     
-    // Check based on dependency behavior
-    switch (task->dep_behavior) {
-        case DEP_ANY_SUCCESS:
-            return success_count > 0;
-            
-        case DEP_ALL_SUCCESS:
-            return success_count == task->dependency_count;
-            
-        case DEP_ANY_COMPLETION:
-            return completion_count > 0;
-            
-        case DEP_ALL_COMPLETION:
-            return completion_count == task->dependency_count;
-            
-        default:
-            return false;
+    // Nếu là DEP_ALL_SUCCESS hoặc DEP_ALL_COMPLETION và đã kiểm tra hết, thì trả về true
+    if (task->dep_behavior == DEP_ALL_SUCCESS || task->dep_behavior == DEP_ALL_COMPLETION) {
+        return true;
     }
+    
+    // Đối với DEP_ANY_SUCCESS hoặc DEP_ANY_COMPLETION, nếu đến đây thì không có task nào thỏa mãn
+    return false;
 }
 
 // Helper function to execute a task with script mode

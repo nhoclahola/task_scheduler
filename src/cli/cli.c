@@ -533,6 +533,8 @@ void cli_add_task(int argc, char *argv[]) {
                 // Set interval
                 task.interval = atoi(argv[i + 1]);
                 task.schedule_type = SCHEDULE_INTERVAL;
+                // Đặt frequency thành CUSTOM để đảm bảo tương thích ngược
+                task.frequency = CUSTOM;
                 i += 2;
             } else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
                 // Set cron schedule

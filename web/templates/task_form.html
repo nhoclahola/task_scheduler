@@ -22,173 +22,246 @@
         </h5>
     </div>
     <div class="card-body">
-        <form method="POST" action="{% if edit_mode %}{{ url_for('update_task', task_id=task.id) }}{% else %}{{ url_for('create_task') }}{% endif %}">
-            <div class="row">
-                <!-- Thông tin cơ bản -->
-                <div class="col-md-6">
-                    <div class="card mb-4">
-                        <div class="card-header bg-light">
-                            <h6 class="mb-0"><i class="fas fa-info-circle me-2"></i>Thông tin cơ bản</h6>
-                        </div>
-                        <div class="card-body">
-                            <div class="mb-3">
-                                <label for="name" class="form-label">Tên tác vụ <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="name" name="name" 
-                                      value="{{ task.name if task else '' }}" required>
-                            </div>
-                            <div class="mb-3">
-                                <label for="exec_mode" class="form-label">Chế độ thực thi</label>
-                                <select class="form-select" id="exec_mode" name="exec_mode">
-                                    <option value="0" {% if task and task.exec_mode == 0 %}selected{% endif %}>Lệnh</option>
-                                    <option value="1" {% if task and task.exec_mode == 1 %}selected{% endif %}>Script</option>
-                                </select>
-                            </div>
-                            <div id="commandInput" class="mb-3">
-                                <label for="command" class="form-label">Lệnh <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="command" name="command" 
-                                      value="{{ task.command if task else '' }}">
-                                <div class="form-text">Lệnh shell để thực thi</div>
-                            </div>
-                            <div id="scriptInput" class="mb-3 script-content">
-                                <label for="script_mode" class="form-label">Chế độ script</label>
-                                <select class="form-select" id="script_mode" name="script_mode">
-                                    <option value="content" {% if task and not task.script_file %}selected{% endif %}>Nhập nội dung script</option>
-                                    <option value="file" {% if task and task.script_file %}selected{% endif %}>Chọn file script</option>
-                                </select>
-                                
-                                <div id="scriptContentInput" class="mt-2">
-                                    <label for="script_content" class="form-label">Nội dung script <span class="text-danger">*</span></label>
-                                    <textarea class="form-control" id="script_content" name="script_content" rows="5">{{ task.script_content if task else '' }}</textarea>
-                                    <div class="form-text">Nội dung script shell sẽ được thực thi</div>
-                                </div>
-                                
-                                <div id="scriptFileInput" class="mt-2">
-                                    <label for="script_file" class="form-label">Đường dẫn file script <span class="text-danger">*</span></label>
-                                    <div class="input-group">
-                                        <input type="text" class="form-control" id="script_file" name="script_file" 
-                                              value="{{ task.script_file if task else '' }}">
-                                        <button class="btn btn-outline-secondary" type="button" id="uploadButton">
-                                            <i class="fas fa-upload"></i> Tải lên
-                                        </button>
-                                    </div>
-                                    <div class="form-text">Đường dẫn tuyệt đối đến file script hoặc tải lên file mới</div>
-                                    <input type="file" class="d-none" id="fileSelector" accept=".sh,.py,.pl,.js,.bat,.cmd">
-                                    <div id="uploadStatus" class="mt-2"></div>
-                                </div>
-                            </div>
-                            <div class="mb-3">
-                                <label for="working_dir" class="form-label">Thư mục làm việc</label>
-                                <input type="text" class="form-control" id="working_dir" name="working_dir" 
-                                      value="{{ task.working_dir if task else '' }}">
-                                <div class="form-text">Thư mục mà lệnh sẽ được thực thi</div>
-                            </div>
-                            <div class="mb-3">
-                                <label for="max_runtime" class="form-label">Thời gian chạy tối đa (giây)</label>
-                                <input type="number" class="form-control" id="max_runtime" name="max_runtime" 
-                                      value="{{ task.max_runtime if task else '0' }}" min="0">
-                                <div class="form-text">0 = không giới hạn</div>
-                            </div>
-                            <div class="form-check form-switch mb-3">
-                                <input class="form-check-input" type="checkbox" id="enabled" name="enabled" 
-                                      {% if not task or task.enabled %}checked{% endif %}>
-                                <label class="form-check-label" for="enabled">Kích hoạt tác vụ</label>
-                            </div>
-                        </div>
+        <form method="POST" action="{{ url_for('create_task') if action == 'create' else url_for('update_task', task_id=task.id) }}" id="taskForm">
+            <!-- Thông tin chung -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0"><i class="fas fa-info-circle me-2"></i>Thông tin cơ bản</h6>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label for="name" class="form-label">Tên tác vụ <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="name" name="name" 
+                              value="{{ task.name }}" required maxlength="255">
+                        <div class="form-text">Tên mô tả cho tác vụ này</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="working_dir" class="form-label">Thư mục làm việc</label>
+                        <input type="text" class="form-control" id="working_dir" name="working_dir" 
+                              value="{{ task.working_dir }}">
+                        <div class="form-text">Để trống để sử dụng thư mục mặc định</div>
                     </div>
                 </div>
-                
-                <!-- Lịch trình và phụ thuộc -->
-                <div class="col-md-6">
-                    <div class="card mb-4">
-                        <div class="card-header bg-light">
-                            <h6 class="mb-0"><i class="fas fa-calendar-alt me-2"></i>Lịch trình</h6>
+            </div>
+
+            <!-- Thông tin lệnh thực thi -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0"><i class="fas fa-code me-2"></i>Thông tin thực thi</h6>
+                </div>
+                <div class="card-body">
+                    <!-- Chọn chế độ thực thi -->
+                    <div class="mb-3">
+                        <label class="form-label d-block">Chế độ thực thi <span class="text-danger">*</span></label>
+                        <div class="btn-group" role="group">
+                            <input type="radio" class="btn-check" name="exec_mode" id="exec_mode_command" value="0" 
+                                  {% if not task or task.exec_mode == 0 %}checked{% endif %}>
+                            <label class="btn btn-outline-primary" for="exec_mode_command">
+                                <i class="fas fa-terminal me-1"></i>Lệnh
+                            </label>
+                            
+                            <input type="radio" class="btn-check" name="exec_mode" id="exec_mode_script" value="1" 
+                                  {% if task and task.exec_mode == 1 %}checked{% endif %}>
+                            <label class="btn btn-outline-primary" for="exec_mode_script">
+                                <i class="fas fa-file-code me-1"></i>Script
+                            </label>
                         </div>
-                        <div class="card-body">
-                            <div class="mb-3">
-                                <label for="schedule_type" class="form-label">Kiểu lịch trình</label>
-                                <select class="form-select" id="schedule_type" name="schedule_type">
-                                    <option value="0" {% if task and task.schedule_type == 0 %}selected{% endif %}>Thủ công</option>
-                                    <option value="1" {% if task and task.schedule_type == 1 %}selected{% endif %}>Theo khoảng thời gian</option>
-                                    <option value="2" {% if task and task.schedule_type == 2 %}selected{% endif %}>Theo biểu thức Cron</option>
-                                </select>
+                    </div>
+                    
+                    <!-- Lệnh -->
+                    <div id="command_section" class="mb-3 {% if task and task.exec_mode == 1 %}d-none{% endif %}">
+                        <label for="command" class="form-label">Lệnh shell <span class="text-danger">*</span></label>
+                        <textarea class="form-control font-monospace" id="command" name="command" rows="3">{{ task.command if task else '' }}</textarea>
+                        <div class="form-text">Lệnh shell cần thực thi</div>
+                    </div>
+                    
+                    <!-- Script section -->
+                    <div id="script_section" class="{% if not task or task.exec_mode == 0 %}d-none{% endif %}">
+                        <!-- Script mode selection -->
+                        <div class="mb-3">
+                            <label class="form-label d-block">Nguồn script</label>
+                            <div class="btn-group" role="group">
+                                <input type="radio" class="btn-check" name="script_mode" id="script_mode_content" value="content" checked>
+                                <label class="btn btn-outline-secondary" for="script_mode_content">
+                                    <i class="fas fa-edit me-1"></i>Nhập nội dung
+                                </label>
+                                
+                                <input type="radio" class="btn-check" name="script_mode" id="script_mode_file" value="file">
+                                <label class="btn btn-outline-secondary" for="script_mode_file">
+                                    <i class="fas fa-upload me-1"></i>Tải lên file
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <!-- Script content textarea -->
+                        <div id="script_content_section" class="mb-3">
+                            <label for="script_content" class="form-label">Nội dung script</label>
+                            <textarea class="form-control font-monospace" id="script_content" name="script_content" rows="10">{{ task.script_content if task and task.script_content else '#!/bin/bash\n\n# Viết script của bạn ở đây\n' }}</textarea>
+                            <div class="form-text">Nhập nội dung script cần thực thi</div>
+                        </div>
+                        
+                        <!-- Script file upload -->
+                        <div id="script_file_section" class="mb-3 d-none">
+                            <label for="script_file_upload" class="form-label">Tải lên script</label>
+                            <div class="input-group">
+                                <input type="file" class="form-control" id="script_file_upload" accept=".sh,.py,.pl,.js,.rb,.bat,.cmd">
+                                <input type="hidden" name="script_file" id="script_file" value="{{ task.script_file if task and task.script_file else '' }}">
+                            </div>
+                            <div class="form-text">Chọn file script để tải lên. File sẽ được lưu vào thư mục /bin/scripts/ và được cấp quyền thực thi tự động.</div>
+                            <div id="upload_status" class="mt-2"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Thời gian chạy tối đa -->
+                    <div class="mb-3">
+                        <label for="max_runtime" class="form-label">Thời gian chạy tối đa (giây)</label>
+                        <input type="number" class="form-control" id="max_runtime" name="max_runtime" 
+                              value="{{ task.max_runtime if task and task.max_runtime else '0' }}" min="0">
+                        <div class="form-text">Đặt giới hạn thời gian chạy tối đa (0 = không giới hạn)</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Lịch trình -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0"><i class="fas fa-calendar-alt me-2"></i>Lịch trình</h6>
+                </div>
+                <div class="card-body">
+                    <!-- Kiểu lịch trình -->
+                    <div class="mb-3">
+                        <label class="form-label">Kiểu lịch trình <span class="text-danger">*</span></label>
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="schedule_type" id="schedule_manual" value="0" 
+                                          {% if not task or task.schedule_type == 0 %}checked{% endif %}>
+                                    <label class="form-check-label" for="schedule_manual">
+                                        <i class="fas fa-hand-point-right me-1"></i>Thủ công
+                                    </label>
+                                    <div class="form-text">Chỉ chạy khi được kích hoạt thủ công</div>
+                                </div>
                             </div>
                             
-                            <!-- Tùy chọn theo khoảng thời gian -->
-                            <div id="intervalOptions" class="schedule-options mb-3">
-                                <div class="mb-3">
-                                    <label for="frequency" class="form-label">Tần suất</label>
-                                    <select class="form-select" id="frequency" name="frequency">
-                                        <option value="0" {% if task and task.frequency == 0 %}selected{% endif %}>Một lần</option>
-                                        <option value="1" {% if task and task.frequency == 1 %}selected{% endif %}>Hàng ngày</option>
-                                        <option value="2" {% if task and task.frequency == 2 %}selected{% endif %}>Hàng tuần</option>
-                                        <option value="3" {% if task and task.frequency == 3 %}selected{% endif %}>Hàng tháng</option>
-                                        <option value="4" {% if task and task.frequency == 4 %}selected{% endif %}>Tùy chỉnh</option>
-                                    </select>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="interval" class="form-label">Khoảng thời gian (phút)</label>
-                                    <input type="number" class="form-control" id="interval" name="interval" 
-                                          value="{{ task.interval // 60 if task and task.interval else '1440' }}" min="1">
-                                    <div class="form-text">Khoảng thời gian giữa các lần chạy</div>
+                            <div class="col-md-4">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="schedule_type" id="schedule_interval" value="1" 
+                                          {% if task and task.schedule_type == 1 %}checked{% endif %}>
+                                    <label class="form-check-label" for="schedule_interval">
+                                        <i class="fas fa-clock me-1"></i>Khoảng thời gian
+                                    </label>
+                                    <div class="form-text">Chạy theo khoảng thời gian đều đặn</div>
                                 </div>
                             </div>
                             
-                            <!-- Tùy chọn theo biểu thức Cron -->
-                            <div id="cronOptions" class="schedule-options mb-3">
-                                <div class="mb-3">
-                                    <label for="cron_expression" class="form-label">Biểu thức Cron</label>
-                                    <input type="text" class="form-control" id="cron_expression" name="cron_expression" 
-                                          value="{{ task.cron_expression if task else '0 0 * * *' }}">
-                                    <div class="form-text">Ví dụ: "0 0 * * *" = chạy hàng ngày lúc 00:00</div>
+                            <div class="col-md-4">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="schedule_type" id="schedule_cron" value="2" 
+                                          {% if task and task.schedule_type == 2 %}checked{% endif %}>
+                                    <label class="form-check-label" for="schedule_cron">
+                                        <i class="fas fa-calendar me-1"></i>Biểu thức Cron
+                                    </label>
+                                    <div class="form-text">Lịch trình theo biểu thức cron</div>
                                 </div>
                             </div>
                         </div>
                     </div>
                     
-                    <!-- Phụ thuộc -->
-                    <div class="card mb-4">
-                        <div class="card-header bg-light">
-                            <h6 class="mb-0"><i class="fas fa-link me-2"></i>Phụ thuộc</h6>
-                        </div>
-                        <div class="card-body">
-                            <div class="mb-3">
-                                <label for="dependencies" class="form-label">Tác vụ phụ thuộc</label>
-                                <select multiple class="form-select dependency-select" id="dependencies" name="dependencies">
-                                    {% for t in tasks %}
-                                        {% if not edit_mode or t.id != task.id %}
-                                            <option value="{{ t.id }}" 
-                                                {% if task and task.dependencies and t.id in task.dependencies %}selected{% endif %}>
-                                                {{ t.name }}
-                                            </option>
-                                        {% endif %}
-                                    {% endfor %}
-                                </select>
-                                <div class="form-text">Tác vụ này sẽ phụ thuộc vào các tác vụ được chọn</div>
-                            </div>
-                            <div class="mb-3">
-                                <label for="dep_behavior" class="form-label">Hành vi phụ thuộc</label>
-                                <select class="form-select" id="dep_behavior" name="dep_behavior">
-                                    <option value="0" {% if task and task.dep_behavior == 0 %}selected{% endif %}>Chạy nếu bất kỳ tác vụ phụ thuộc nào thành công</option>
-                                    <option value="1" {% if task and task.dep_behavior == 1 %}selected{% endif %}>Chạy chỉ khi tất cả tác vụ phụ thuộc thành công</option>
-                                    <option value="2" {% if task and task.dep_behavior == 2 %}selected{% endif %}>Chạy nếu bất kỳ tác vụ phụ thuộc nào hoàn thành</option>
-                                    <option value="3" {% if task and task.dep_behavior == 3 %}selected{% endif %}>Chạy sau khi tất cả tác vụ phụ thuộc hoàn thành</option>
-                                </select>
-                            </div>
+                    <!-- Interval settings -->
+                    <div id="interval_section" class="mb-3 {% if not task or task.schedule_type != 1 %}d-none{% endif %}">
+                        <label for="interval" class="form-label">Khoảng thời gian (phút)</label>
+                        <input type="number" class="form-control" id="interval" name="interval" 
+                              value="{{ task.interval // 60 if task and task.interval else '5' }}" min="1">
+                        <div class="form-text">Tác vụ sẽ chạy sau mỗi X phút</div>
+                    </div>
+                    
+                    <!-- Cron expression -->
+                    <div id="cron_section" class="mb-3 {% if not task or task.schedule_type != 2 %}d-none{% endif %}">
+                        <label for="cron_expression" class="form-label">Biểu thức Cron</label>
+                        <input type="text" class="form-control font-monospace" id="cron_expression" name="cron_expression" 
+                              value="{{ task.cron_expression if task and task.cron_expression else '0 * * * *' }}">
+                        <div class="form-text">
+                            Định dạng: phút giờ ngày tháng thứ (VD: "0 * * * *" = chạy mỗi giờ)
+                            <a href="https://crontab.guru/" target="_blank">Công cụ hỗ trợ <i class="fas fa-external-link-alt fa-xs"></i></a>
                         </div>
                     </div>
                 </div>
             </div>
-            
-            <!-- Buttons -->
-            <div class="mt-4 d-flex justify-content-between">
-                <a href="{% if edit_mode %}{{ url_for('view_task', task_id=task.id) }}{% else %}{{ url_for('index') }}{% endif %}" 
-                   class="btn btn-secondary">
-                    <i class="fas fa-times me-1"></i>Hủy
-                </a>
-                <button type="submit" class="btn btn-primary">
-                    <i class="fas {% if edit_mode %}fa-save{% else %}fa-plus{% endif %} me-1"></i>
-                    {% if edit_mode %}Lưu thay đổi{% else %}Tạo tác vụ{% endif %}
-                </button>
+
+            <!-- Phụ thuộc -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0"><i class="fas fa-link me-2"></i>Phụ thuộc</h6>
+                </div>
+                <div class="card-body">
+                    <!-- Hành vi phụ thuộc -->
+                    <div class="mb-3">
+                        <label for="dep_behavior" class="form-label">Hành vi phụ thuộc</label>
+                        <select class="form-select" id="dep_behavior" name="dep_behavior">
+                            <option value="0" {% if not task or task.dep_behavior == 0 %}selected{% endif %}>
+                                Chạy nếu bất kỳ tác vụ phụ thuộc nào thành công
+                            </option>
+                            <option value="1" {% if task and task.dep_behavior == 1 %}selected{% endif %}>
+                                Chạy chỉ khi tất cả tác vụ phụ thuộc thành công
+                            </option>
+                            <option value="2" {% if task and task.dep_behavior == 2 %}selected{% endif %}>
+                                Chạy nếu bất kỳ tác vụ phụ thuộc nào hoàn thành
+                            </option>
+                            <option value="3" {% if task and task.dep_behavior == 3 %}selected{% endif %}>
+                                Chạy sau khi tất cả tác vụ phụ thuộc hoàn thành
+                            </option>
+                        </select>
+                        <div class="form-text">Chọn điều kiện để tác vụ này được thực thi dựa trên các tác vụ phụ thuộc</div>
+                    </div>
+                    
+                    <!-- Danh sách tác vụ phụ thuộc -->
+                    <div class="mb-3">
+                        <label for="dependencies" class="form-label">Tác vụ phụ thuộc</label>
+                        <select multiple class="form-select dependency-select" id="dependencies" name="dependencies">
+                            {% for available_task in available_tasks %}
+                                {% if task and task.id != available_task.id %}
+                                    <option value="{{ available_task.id }}" 
+                                            {% if task and task.dependencies and available_task.id in task.dependencies %}selected{% endif %}>
+                                        {{ available_task.name }} (ID: {{ available_task.id }})
+                                    </option>
+                                {% endif %}
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">
+                            {% if task and task.id %}
+                                Giữ Ctrl (hoặc Cmd trên Mac) và click để chọn nhiều tác vụ. Tối đa 10 tác vụ phụ thuộc.
+                                {% if not available_tasks or available_tasks|length <= 1 %}
+                                    <div class="mt-2 alert alert-info small">
+                                        <i class="fas fa-info-circle me-1"></i>
+                                        Không có tác vụ khác để thiết lập phụ thuộc
+                                    </div>
+                                {% endif %}
+                            {% else %}
+                                Bạn sẽ có thể thiết lập phụ thuộc sau khi tạo tác vụ này.
+                                <div class="mt-2 alert alert-info small">
+                                    <i class="fas fa-info-circle me-1"></i>
+                                    Bạn cần lưu tác vụ này trước khi có thể thiết lập phụ thuộc
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Nút submit -->
+            <div class="row">
+                <div class="col-md-6">
+                    <a href="{{ url_for('index') }}" class="btn btn-outline-secondary w-100">
+                        <i class="fas fa-times me-1"></i>Hủy
+                    </a>
+                </div>
+                <div class="col-md-6">
+                    <button type="submit" class="btn btn-primary w-100" id="submitBtn">
+                        <i class="fas {% if action == 'create' %}fa-plus{% else %}fa-save{% endif %} me-1"></i>
+                        {% if action == 'create' %}Tạo tác vụ{% else %}Cập nhật{% endif %}
+                    </button>
+                </div>
             </div>
         </form>
     </div>
@@ -199,33 +272,32 @@
 <script>
     // Xử lý hiển thị các tùy chọn lịch trình
     function updateScheduleOptions() {
-        const scheduleType = document.getElementById('schedule_type').value;
+        const scheduleType = document.querySelector('input[name="schedule_type"]:checked').value;
         
-        // Ẩn tất cả các tùy chọn
-        document.querySelectorAll('.schedule-options').forEach(el => {
-            el.style.display = 'none';
-        });
+        // Ẩn tất cả các tùy chọn trước
+        document.getElementById('interval_section').classList.add('d-none');
+        document.getElementById('cron_section').classList.add('d-none');
         
         // Hiển thị tùy chọn phù hợp
         if (scheduleType === '1') {
-            document.getElementById('intervalOptions').style.display = 'block';
+            document.getElementById('interval_section').classList.remove('d-none');
         } else if (scheduleType === '2') {
-            document.getElementById('cronOptions').style.display = 'block';
+            document.getElementById('cron_section').classList.remove('d-none');
         }
     }
     
     // Xử lý hiển thị nội dung script/lệnh
     function updateExecModeOptions() {
-        const execMode = document.getElementById('exec_mode').value;
+        const execMode = document.querySelector('input[name="exec_mode"]:checked').value;
         
         if (execMode === '0') {
             // Chế độ lệnh
-            document.getElementById('commandInput').style.display = 'block';
-            document.getElementById('scriptInput').style.display = 'none';
+            document.getElementById('command_section').classList.remove('d-none');
+            document.getElementById('script_section').classList.add('d-none');
         } else {
             // Chế độ script
-            document.getElementById('commandInput').style.display = 'none';
-            document.getElementById('scriptInput').style.display = 'block';
+            document.getElementById('command_section').classList.add('d-none');
+            document.getElementById('script_section').classList.remove('d-none');
             
             // Cập nhật chế độ script
             updateScriptModeOptions();
@@ -234,52 +306,48 @@
     
     // Xử lý hiển thị tùy chọn chế độ script
     function updateScriptModeOptions() {
-        const scriptMode = document.getElementById('script_mode').value;
+        const scriptMode = document.querySelector('input[name="script_mode"]:checked').value;
         
         if (scriptMode === 'content') {
             // Chế độ nhập nội dung script
-            document.getElementById('scriptContentInput').style.display = 'block';
-            document.getElementById('scriptFileInput').style.display = 'none';
+            document.getElementById('script_content_section').classList.remove('d-none');
+            document.getElementById('script_file_section').classList.add('d-none');
         } else {
             // Chế độ chọn file script
-            document.getElementById('scriptContentInput').style.display = 'none';
-            document.getElementById('scriptFileInput').style.display = 'block';
+            document.getElementById('script_content_section').classList.add('d-none');
+            document.getElementById('script_file_section').classList.remove('d-none');
         }
     }
     
     // Gắn các sự kiện
     document.addEventListener('DOMContentLoaded', function() {
-        const scheduleTypeSelect = document.getElementById('schedule_type');
-        const execModeSelect = document.getElementById('exec_mode');
-        const scriptModeSelect = document.getElementById('script_mode');
-        
         // Cập nhật ban đầu
         updateScheduleOptions();
         updateExecModeOptions();
+        updateScriptModeOptions();
         
-        // Cập nhật khi thay đổi
-        scheduleTypeSelect.addEventListener('change', updateScheduleOptions);
-        execModeSelect.addEventListener('change', updateExecModeOptions);
+        // Thêm event listener cho các radio button kiểu lịch trình
+        document.querySelectorAll('input[name="schedule_type"]').forEach(radio => {
+            radio.addEventListener('change', updateScheduleOptions);
+        });
         
-        // Thêm event listener cho script_mode nếu có
-        if (scriptModeSelect) {
-            scriptModeSelect.addEventListener('change', updateScriptModeOptions);
-        }
+        // Thêm event listener cho các radio button chế độ thực thi
+        document.querySelectorAll('input[name="exec_mode"]').forEach(radio => {
+            radio.addEventListener('change', updateExecModeOptions);
+        });
         
-        // Xử lý chọn và upload file
-        const fileSelector = document.getElementById('fileSelector');
+        // Thêm event listener cho các radio button chế độ script
+        document.querySelectorAll('input[name="script_mode"]').forEach(radio => {
+            radio.addEventListener('change', updateScriptModeOptions);
+        });
+        
+        // Xử lý tải lên file
+        const fileUploadInput = document.getElementById('script_file_upload');
         const scriptFileInput = document.getElementById('script_file');
-        const uploadButton = document.getElementById('uploadButton');
-        const uploadStatus = document.getElementById('uploadStatus');
+        const uploadStatus = document.getElementById('upload_status');
         
-        if (uploadButton && fileSelector) {
-            uploadButton.addEventListener('click', function() {
-                fileSelector.click();
-            });
-        }
-        
-        if (fileSelector && scriptFileInput) {
-            fileSelector.addEventListener('change', function(e) {
+        if (fileUploadInput) {
+            fileUploadInput.addEventListener('change', function(e) {
                 if (e.target.files && e.target.files.length > 0) {
                     const file = e.target.files[0];
                     

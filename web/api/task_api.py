@@ -498,14 +498,73 @@ class TaskAPI:
             # Kiểm tra xem có script_file hay không
             if 'script_file' in task_data and task_data['script_file']:
                 script_file = task_data['script_file'].replace('"', '\\"')
-                cmd_parts.append('-f')
-                cmd_parts.append(f'"{script_file}"')
+                
+                # Kiểm tra xem file có tồn tại và có nội dung không
+                try:
+                    if os.path.exists(script_file):
+                        # Đọc nội dung file để kiểm tra
+                        with open(script_file, 'r') as f:
+                            script_content = f.read().strip()
+                        
+                        if not script_content:
+                            # File trống, thêm nội dung mẫu
+                            with open(script_file, 'w') as f:
+                                f.write('#!/bin/bash\n\necho "Hello from script"\n')
+                            print(f"Added sample content to empty script file: {script_file}")
+                    else:
+                        print(f"Script file not found: {script_file}")
+                        # Quay lại sử dụng lệnh trực tiếp
+                        cmd_parts.append(f'"echo Script file not found: {os.path.basename(script_file)}"')
+                        exec_mode = 0
+                except Exception as e:
+                    print(f"Error checking script file: {e}")
+                    # Quay lại sử dụng lệnh trực tiếp
+                    cmd_parts.append(f'"echo Error with script file: {os.path.basename(script_file)}"')
+                    exec_mode = 0
+                
+                # Nếu vẫn ở chế độ script, thêm tham số file
+                if exec_mode == 1:
+                    cmd_parts.append('-f')
+                    cmd_parts.append(f'"{script_file}"')
+            
             # Hoặc dùng script_content
             elif 'script_content' in task_data and task_data['script_content']:
-                cmd_parts.append('--script')
-                # Mã script cần được đóng gói đúng cách
-                script_content = task_data['script_content'].replace('"', '\\"')
-                cmd_parts.append(f'"{script_content}"')
+                script_content = task_data['script_content'].strip()
+                
+                if script_content:
+                    # Tạo file script tạm thời từ nội dung
+                    import tempfile
+                    
+                    # Tạo thư mục scripts trong bin nếu chưa tồn tại
+                    script_dir = os.path.join(self.base_dir, "bin", "scripts")
+                    os.makedirs(script_dir, exist_ok=True)
+                    
+                    # Tạo file tạm với đuôi .sh để dễ nhận dạng
+                    fd, temp_path = tempfile.mkstemp(suffix='.sh', prefix='script_', dir=script_dir)
+                    
+                    try:
+                        # Ghi nội dung vào file
+                        with os.fdopen(fd, 'w') as f:
+                            f.write(script_content)
+                        
+                        # Cấp quyền thực thi cho file
+                        os.chmod(temp_path, 0o755)
+                        
+                        # Thêm đường dẫn file vào lệnh
+                        cmd_parts.append('-f')
+                        cmd_parts.append(f'"{temp_path}"')
+                        
+                        print(f"Created script file from content: {temp_path}")
+                    except Exception as e:
+                        print(f"Error creating script file: {e}")
+                        # Quay lại sử dụng lệnh trực tiếp
+                        cmd_parts.append(f'"echo Error creating script: {str(e)}"')
+                        exec_mode = 0
+                    
+                else:
+                    # Nếu nội dung trống, quay lại sử dụng lệnh trực tiếp
+                    cmd_parts.append('"echo Hello World"')
+                    exec_mode = 0
         
         # Thêm các tùy chọn
         # Nếu có khoảng thời gian (interval)
@@ -592,8 +651,7 @@ class TaskAPI:
                 
             print(f"Task {task_id} {enabled_status}d successfully")
             return True
-        
-        # Nếu cần cập nhật nhiều thuộc tính khác, tiếp tục sử dụng cách xóa và tạo lại
+            
         # Lấy thông tin hiện tại của task trước khi xóa
         current_task = self.get_task(task_id)
         if not current_task:
@@ -603,6 +661,12 @@ class TaskAPI:
         # Lưu giá trị last_run_time và exit_code từ task hiện tại
         last_run_time = current_task.get('last_run_time', 0)
         exit_code_value = current_task.get('exit_code', 0)
+        
+        # Bảo tồn thông tin phụ thuộc hiện tại nếu không được cập nhật
+        if 'dependencies' not in task_data and 'dependencies' in current_task:
+            task_data['dependencies'] = current_task['dependencies']
+        if 'dep_behavior' not in task_data and 'dep_behavior' in current_task:
+            task_data['dep_behavior'] = current_task['dep_behavior']
         
         # Đầu tiên, xóa tác vụ cũ
         remove_exit_code, output = self._run_command(f"remove {task_id}")
@@ -627,14 +691,73 @@ class TaskAPI:
             # Kiểm tra xem có script_file hay không
             if 'script_file' in task_data and task_data['script_file']:
                 script_file = task_data['script_file'].replace('"', '\\"')
-                cmd_parts.append('-f')
-                cmd_parts.append(f'"{script_file}"')
+                
+                # Kiểm tra xem file có tồn tại và có nội dung không
+                try:
+                    if os.path.exists(script_file):
+                        # Đọc nội dung file để kiểm tra
+                        with open(script_file, 'r') as f:
+                            script_content = f.read().strip()
+                        
+                        if not script_content:
+                            # File trống, thêm nội dung mẫu
+                            with open(script_file, 'w') as f:
+                                f.write('#!/bin/bash\n\necho "Hello from script"\n')
+                            print(f"Added sample content to empty script file: {script_file}")
+                    else:
+                        print(f"Script file not found: {script_file}")
+                        # Quay lại sử dụng lệnh trực tiếp
+                        cmd_parts.append(f'"echo Script file not found: {os.path.basename(script_file)}"')
+                        exec_mode = 0
+                except Exception as e:
+                    print(f"Error checking script file: {e}")
+                    # Quay lại sử dụng lệnh trực tiếp
+                    cmd_parts.append(f'"echo Error with script file: {os.path.basename(script_file)}"')
+                    exec_mode = 0
+                
+                # Nếu vẫn ở chế độ script, thêm tham số file
+                if exec_mode == 1:
+                    cmd_parts.append('-f')
+                    cmd_parts.append(f'"{script_file}"')
+            
             # Hoặc dùng script_content
             elif 'script_content' in task_data and task_data['script_content']:
-                cmd_parts.append('--script')
-                # Mã script cần được đóng gói đúng cách
-                script_content = task_data['script_content'].replace('"', '\\"')
-                cmd_parts.append(f'"{script_content}"')
+                script_content = task_data['script_content'].strip()
+                
+                if script_content:
+                    # Tạo file script tạm thời từ nội dung
+                    import tempfile
+                    
+                    # Tạo thư mục scripts trong bin nếu chưa tồn tại
+                    script_dir = os.path.join(self.base_dir, "bin", "scripts")
+                    os.makedirs(script_dir, exist_ok=True)
+                    
+                    # Tạo file tạm với đuôi .sh để dễ nhận dạng
+                    fd, temp_path = tempfile.mkstemp(suffix='.sh', prefix='script_', dir=script_dir)
+                    
+                    try:
+                        # Ghi nội dung vào file
+                        with os.fdopen(fd, 'w') as f:
+                            f.write(script_content)
+                        
+                        # Cấp quyền thực thi cho file
+                        os.chmod(temp_path, 0o755)
+                        
+                        # Thêm đường dẫn file vào lệnh
+                        cmd_parts.append('-f')
+                        cmd_parts.append(f'"{temp_path}"')
+                        
+                        print(f"Created script file from content: {temp_path}")
+                    except Exception as e:
+                        print(f"Error creating script file: {e}")
+                        # Quay lại sử dụng lệnh trực tiếp
+                        cmd_parts.append(f'"echo Error creating script: {str(e)}"')
+                        exec_mode = 0
+                    
+                else:
+                    # Nếu nội dung trống, quay lại sử dụng lệnh trực tiếp
+                    cmd_parts.append('"echo Hello World"')
+                    exec_mode = 0
         
         # Thêm các tùy chọn
         # Nếu có khoảng thời gian (interval)
@@ -696,6 +819,8 @@ class TaskAPI:
                 except Exception as e:
                     print(f"Error updating historical data in database: {e}")
             
+            # Phần thêm phụ thuộc sẽ được xử lý riêng bởi phương thức add_dependency
+            
             print(f"Updated task {task_id} with new ID {new_task_id}")
             return True
         else:
@@ -737,6 +862,171 @@ class TaskAPI:
             return False
         
         return True
+    
+    def extract_json_from_text(self, text):
+        """Trích xuất phần JSON từ text bất kỳ, xử lý cả trường hợp có nhiều JSON object"""
+        result = None
+        if not text:
+            return result
+            
+        # Tìm tất cả các đoạn bắt đầu bằng { và kết thúc bằng }
+        json_pattern = re.compile(r'({.*?})', re.DOTALL)
+        matches = json_pattern.findall(text)
+        
+        if not matches:
+            return result
+            
+        # Thử parse từng đoạn tìm được
+        for match in matches:
+            try:
+                json_obj = json.loads(match)
+                # Ưu tiên JSON có nhiều trường hợp
+                if isinstance(json_obj, dict) and len(json_obj) > 1:
+                    # Nếu có trường id hoặc task_count, đây có khả năng cao là JSON chúng ta cần
+                    if 'id' in json_obj or 'task_count' in json_obj or 'tasks' in json_obj:
+                        return json_obj
+                # Lưu lại kết quả đầu tiên parse thành công để trả về nếu không tìm thấy JSON tốt hơn
+                if result is None:
+                    result = json_obj
+            except json.JSONDecodeError:
+                continue
+                
+        return result
+        
+    def _parse_json_output(self, output):
+        """Phân tích output dạng JSON, cải tiến để xử lý tốt hơn"""
+        try:
+            if not output:
+                return None
+                
+            # Sử dụng hàm trích xuất JSON từ text
+            json_obj = self.extract_json_from_text(output)
+            if json_obj:
+                return json_obj
+                
+            # Phương pháp cũ nếu hàm mới không hoạt động
+            json_start = output.find('{')
+            json_end = output.rfind('}') + 1
+            
+            if json_start >= 0 and json_end > json_start:
+                json_str = output[json_start:json_end]
+                try:
+                    return json.loads(json_str)
+                except json.JSONDecodeError:
+                    # Thử loại bỏ các ký tự đặc biệt và thử lại
+                    clean_json = re.sub(r'[\x00-\x1F\x7F]', '', json_str)
+                    return json.loads(clean_json)
+            
+            return None
+        except Exception as e:
+            print(f"Error parsing JSON: {e}, Output: {output}")
+            return None
+    
+    def add_dependency(self, task_id, dependency_id):
+        """Thêm phụ thuộc giữa các tác vụ sử dụng lệnh add-dep của backend"""
+        if self.simulation_mode:
+            # Trong chế độ giả lập
+            if task_id in self.tasks and dependency_id in self.tasks:
+                task = self.tasks[task_id]
+                if 'dependencies' not in task:
+                    task['dependencies'] = []
+                if dependency_id not in task['dependencies']:
+                    task['dependencies'].append(dependency_id)
+                    return True
+            return False
+            
+        # Sử dụng lệnh add-dep trực tiếp
+        exit_code, output = self._run_command(f"add-dep {task_id} {dependency_id}")
+        if exit_code != 0:
+            print(f"Error adding dependency: {output}")
+            return False
+            
+        # Kiểm tra kết quả
+        if "Added dependency:" in output:
+            print(f"Successfully added dependency: Task {task_id} now depends on Task {dependency_id}")
+            return True
+        else:
+            print(f"Failed to add dependency: {output}")
+            return False
+        
+    def remove_dependency(self, task_id, dependency_id):
+        """Xóa phụ thuộc giữa các tác vụ sử dụng lệnh remove-dep của backend"""
+        if self.simulation_mode:
+            # Trong chế độ giả lập
+            if task_id in self.tasks and 'dependencies' in self.tasks[task_id]:
+                if dependency_id in self.tasks[task_id]['dependencies']:
+                    self.tasks[task_id]['dependencies'].remove(dependency_id)
+                    return True
+            return False
+            
+        # Sử dụng lệnh remove-dep trực tiếp
+        exit_code, output = self._run_command(f"remove-dep {task_id} {dependency_id}")
+        if exit_code != 0:
+            print(f"Error removing dependency: {output}")
+            return False
+            
+        # Kiểm tra kết quả
+        if "Removed dependency:" in output:
+            print(f"Successfully removed dependency: Task {task_id} no longer depends on Task {dependency_id}")
+            return True
+        else:
+            print(f"Failed to remove dependency: {output}")
+            return False
+            
+    def set_dependency_behavior(self, task_id, behavior):
+        """Cài đặt hành vi phụ thuộc cho tác vụ"""
+        if self.simulation_mode:
+            # Trong chế độ giả lập
+            if task_id in self.tasks:
+                self.tasks[task_id]['dep_behavior'] = behavior
+                return True
+            return False
+            
+        # Trước tiên, thử sử dụng lệnh set-dep-behavior trực tiếp
+        exit_code, output = self._run_command(f"set-dep-behavior {task_id} {behavior}")
+        
+        # Kiểm tra xem lệnh có thành công không
+        if exit_code == 0 and "dependency behavior updated" in output:
+            print(f"Successfully updated dependency behavior for task {task_id}")
+            return True
+            
+        # Nếu lệnh không thành công hoặc lỗi, thử cập nhật trực tiếp vào cơ sở dữ liệu
+        try:
+            import sqlite3
+            db_path = os.path.join(self.data_dir, "tasks.db")
+            if os.path.exists(db_path):
+                # Kết nối đến cơ sở dữ liệu
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                
+                # Cập nhật trường dep_behavior
+                cursor.execute("UPDATE tasks SET dep_behavior = ? WHERE id = ?", (behavior, task_id))
+                conn.commit()
+                
+                # Kiểm tra xem có bao nhiêu hàng bị ảnh hưởng
+                affected_rows = cursor.rowcount
+                conn.close()
+                
+                if affected_rows > 0:
+                    print(f"Successfully updated dependency behavior in database for task {task_id}")
+                    return True
+                else:
+                    print(f"No records updated in database for task {task_id}")
+                    return False
+            else:
+                print(f"Error: Database file not found at {db_path}")
+                return False
+        except Exception as e:
+            print(f"Error updating dependency behavior in database: {e}")
+            return False
+        
+        # Nếu không thể cập nhật, thử trả về kết quả từ lệnh ban đầu
+        if "dependency behavior updated" in output:
+            print(f"Successfully updated dependency behavior for task {task_id}")
+            return True
+        else:
+            print(f"Failed to update dependency behavior: {output}")
+            return False
     
     def __del__(self):
         """Dọn dẹp khi đối tượng bị hủy"""
