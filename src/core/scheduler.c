@@ -545,10 +545,10 @@ static void* scheduler_thread_func(void *arg) {
     char log_buffer[256];
     time_t current_time;
     
-    // Tạo cấu trúc để lưu trữ thông tin về các tác vụ sẽ thực thi
+    // Create structure to store task execution information
     typedef struct {
-        Task task;           // Bản sao của tác vụ
-        int original_index;  // Vị trí ban đầu trong danh sách tác vụ
+        Task task;           // Copy of the task
+        int original_index;  // Original position in task list
     } TaskExecutionInfo;
     
     TaskExecutionInfo tasks_to_execute[MAX_TASKS_TO_EXECUTE];
@@ -560,63 +560,98 @@ static void* scheduler_thread_func(void *arg) {
         num_tasks_to_execute = 0;
         current_time = time(NULL);
         
-        // Khóa mutex trước khi truy cập danh sách tác vụ
+        // Debug log current time
+        char time_buffer[64];
+        time_to_string(current_time, time_buffer, sizeof(time_buffer), NULL);
+        log_message(LOG_DEBUG, "Scheduler checking tasks at %s", time_buffer);
+        
+        // Lock mutex before accessing task list
         pthread_mutex_lock(&scheduler->lock);
         
-        // Kiểm tra các tác vụ quá hạn
+        // Check tasks for execution
         for (int i = 0; i < scheduler->task_count; i++) {
             Task *task = &scheduler->tasks[i];
             
-            // Bỏ qua các tác vụ đã chạy và không phải định kỳ
+            // Debug log task info
+            if (task->enabled) {
+                char next_run_buffer[64];
+                time_to_string(task->next_run_time, next_run_buffer, sizeof(next_run_buffer), NULL);
+                char last_run_buffer[64];
+                if (task->last_run_time > 0) {
+                    time_to_string(task->last_run_time, last_run_buffer, sizeof(last_run_buffer), NULL);
+                } else {
+                    strcpy(last_run_buffer, "Never");
+                }
+                
+                log_message(LOG_DEBUG, "Task %d (%s): enabled=%d, schedule_type=%d, next_run=%s, last_run=%s", 
+                    task->id, task->name, task->enabled, task->schedule_type, next_run_buffer, last_run_buffer);
+            }
+            
+            // Skip tasks that are disabled or one-time tasks already executed or manual tasks
             if (!task->enabled || 
-                (task->last_run_time > 0 && task->frequency == ONCE) ||
-                (task->last_run_time > 0 && task->schedule_type == SCHEDULE_MANUAL)) {
+                (task->last_run_time > 0 && task->frequency == ONCE && task->schedule_type != SCHEDULE_INTERVAL && task->schedule_type != SCHEDULE_CRON) ||
+                (task->schedule_type == SCHEDULE_MANUAL)) {
+                
+                // Log reason for skipping
+                if (!task->enabled) {
+                    log_message(LOG_DEBUG, "Task %d (%s): Skipped - disabled", task->id, task->name);
+                } else if (task->last_run_time > 0 && task->frequency == ONCE && task->schedule_type != SCHEDULE_INTERVAL && task->schedule_type != SCHEDULE_CRON) {
+                    log_message(LOG_DEBUG, "Task %d (%s): Skipped - one-time task already executed", task->id, task->name);
+                } else if (task->schedule_type == SCHEDULE_MANUAL) {
+                    log_message(LOG_DEBUG, "Task %d (%s): Skipped - manual schedule", task->id, task->name);
+                }
+                
                 continue;
             }
             
-            // Kiểm tra các tác vụ đến thời gian chạy
+            // Check if task is due to run
             if (task->next_run_time <= current_time) {
-                // Kiểm tra xem các phụ thuộc của tác vụ đã được thỏa mãn chưa
+                log_message(LOG_DEBUG, "Task %d (%s): Due for execution (next_run=%ld, current=%ld)", 
+                    task->id, task->name, task->next_run_time, current_time);
+                
+                // Check if dependencies are satisfied
                 if (check_dependencies_satisfied(scheduler, task)) {
-                    log_message(LOG_DEBUG, "Task ID %d đến thời gian chạy.", task->id);
+                    log_message(LOG_INFO, "Task ID %d (%s) is due and dependencies are satisfied.", task->id, task->name);
                     
-                    // Sao chép tác vụ vào mảng tạm thời để thực thi sau khi mở khóa mutex
+                    // Copy task to temporary array for execution after unlocking mutex
                     if (num_tasks_to_execute < MAX_TASKS_TO_EXECUTE) {
                         memcpy(&(tasks_to_execute[num_tasks_to_execute].task), task, sizeof(Task));
                         tasks_to_execute[num_tasks_to_execute].original_index = i;
                         num_tasks_to_execute++;
                     } else {
-                        log_message(LOG_WARNING, "Đạt đến giới hạn số lượng tác vụ cần thực thi.");
+                        log_message(LOG_WARNING, "Reached maximum number of tasks to execute.");
                         break;
                     }
                     
-                    // Không cần cập nhật thời gian chạy tiếp theo ở đây nữa
-                    // Vì nó sẽ được cập nhật trong task_mark_executed sau khi thực thi
-                    // Chỉ ghi nhật ký cho mục đích gỡ lỗi
+                    // Next run time will be updated in task_mark_executed after execution
+                    // Log for debugging purposes
                     if (task->frequency != ONCE) {
-                        log_message(LOG_DEBUG, "Tác vụ ID %d là định kỳ. Sẽ được lên lịch lại sau khi thực thi.", 
-                                task->id);
+                        log_message(LOG_DEBUG, "Task ID %d (%s) is recurring. Will be rescheduled after execution.", 
+                                task->id, task->name);
                     }
                 } else {
-                    log_message(LOG_DEBUG, "Tác vụ ID %d đến thời gian chạy nhưng các phụ thuộc chưa thỏa mãn.", task->id);
+                    log_message(LOG_DEBUG, "Task ID %d (%s) is due but dependencies are not satisfied.", task->id, task->name);
                 }
+            } else {
+                log_message(LOG_DEBUG, "Task %d (%s): Not due yet (next_run=%ld, current=%ld, diff=%ld seconds)", 
+                    task->id, task->name, task->next_run_time, current_time, task->next_run_time - current_time);
             }
         }
         
-        // Mở khóa mutex sau khi đã sao chép các tác vụ cần thiết
+        // Unlock mutex after copying necessary tasks
         pthread_mutex_unlock(&scheduler->lock);
         
-        // Thực thi các tác vụ được sao chép sau khi đã mở khóa mutex
+        // Execute copied tasks after unlocking mutex
         for (int i = 0; i < num_tasks_to_execute; i++) {
             Task *task = &(tasks_to_execute[i].task);
-            int task_id = task->id;  // Lưu ID của tác vụ để tìm kiếm sau này
+            int task_id = task->id;  // Store task ID for later lookup
             int exit_code = 0;
             
-            log_message(LOG_INFO, "Thực thi tác vụ ID %d: %s", task_id, task->name);
+            log_message(LOG_INFO, "Executing task ID %d: %s", task_id, task->name);
             
-            // Thực thi tác vụ dựa vào chế độ
+            // Execute task based on mode
             if (task->exec_mode == EXEC_SCRIPT) {
-                // Tạo script tạm thời và thực thi
+                // Create temporary script and execute
                 char temp_path[512];
                 if (task_prepare_script(task, temp_path, sizeof(temp_path))) {
                     run_command_with_timeout(
@@ -626,32 +661,32 @@ static void* scheduler_thread_func(void *arg) {
                         &exit_code
                     );
                     
-                    // Xóa file tạm sau khi thực thi
+                    // Delete temporary file after execution
                     unlink(temp_path);
                 } else {
                     log_message(LOG_ERROR, "Failed to prepare script for task %d", task_id);
                     exit_code = -1;
                 }
             } else if (task->exec_mode == EXEC_AI_DYNAMIC) {
-                // Tải lại cấu hình mỗi lần để đảm bảo đọc API key mới nhất
+                // Reload configuration each time to ensure latest API key
                 ai_load_config(NULL);
                 
-                // Lấy Deepseek API key từ cấu hình hoặc biến môi trường
+                // Get Deepseek API key from config or environment
                 const char *api_key = ai_get_api_key();
                 if (!api_key) {
                     log_message(LOG_ERROR, "DeepSeek API key not found in config file or environment variable");
                     log_message(LOG_INFO, "Please set your API key using 'taskscheduler set-api-key YOUR_API_KEY' command");
                     exit_code = -1;
                 } else {
-                    // Thu thập thông tin hệ thống
+                    // Collect system metrics
                     SystemMetrics metrics;
-                    init_system_metrics(&metrics); // Khởi tạo metrics trước khi thu thập
+                    init_system_metrics(&metrics); // Initialize metrics before collection
                     
                     if (!collect_system_metrics(task->system_metrics, &metrics)) {
                         log_message(LOG_ERROR, "Failed to collect system metrics for task %d", task_id);
                         exit_code = -1;
                     } else {
-                        // Sử dụng hàm AI mới để tạo lệnh từ AI
+                        // Use AI function to generate command
                         char *command = ai_generate_command(&metrics, task->ai_prompt);
                         
                         if (!command || strlen(command) == 0) {
@@ -659,10 +694,10 @@ static void* scheduler_thread_func(void *arg) {
                             if (command) free(command);
                             exit_code = -1;
                         } else {
-                            // Ghi log lệnh được tạo ra
+                            // Log generated command
                             log_message(LOG_INFO, "AI generated command for task %d: %s", task_id, command);
                             
-                            // Thực thi lệnh
+                            // Execute command
                             run_command_with_timeout(
                                 command,
                                 task->working_dir[0] ? task->working_dir : NULL,
@@ -670,13 +705,13 @@ static void* scheduler_thread_func(void *arg) {
                                 &exit_code
                             );
                             
-                            // Giải phóng lệnh
+                            // Free command
                             free(command);
                         }
                     }
                 }
             } else {
-                // Thực thi lệnh shell
+                // Execute shell command
                 run_command_with_timeout(
                     task->command,
                     task->working_dir[0] ? task->working_dir : NULL,
@@ -685,23 +720,23 @@ static void* scheduler_thread_func(void *arg) {
                 );
             }
             
-            // Khóa mutex để cập nhật trạng thái tác vụ trong danh sách chính
+            // Lock mutex to update task status in main list
             pthread_mutex_lock(&scheduler->lock);
             
-            // Tìm lại tác vụ trong danh sách chính (vì con trỏ có thể đã thay đổi)
+            // Find task again in main list (pointer may have changed)
             int task_index = find_task_index(scheduler, task_id);
             if (task_index >= 0) {
                 Task *original_task = &scheduler->tasks[task_index];
                 
-                // Cập nhật trạng thái thực thi
+                // Update execution status
                 task_mark_executed(original_task, exit_code);
                 
-                // Lưu vào cơ sở dữ liệu
-                pthread_mutex_unlock(&scheduler->lock); // Mở khóa mutex trước khi thao tác với DB
+                // Save to database
+                pthread_mutex_unlock(&scheduler->lock); // Unlock mutex before DB operation
                 db_update_task(original_task);
-                pthread_mutex_lock(&scheduler->lock); // Khóa lại sau khi hoàn thành
+                pthread_mutex_lock(&scheduler->lock); // Lock again after completion
                 
-                // Ghi nhật ký
+                // Log execution
                 time_to_string(original_task->last_run_time, log_buffer, sizeof(log_buffer), NULL);
                 log_message(LOG_INFO, "Task executed: ID=%d, Name=%s, Time=%s, Exit code=%d",
                            original_task->id, original_task->name, log_buffer, original_task->exit_code);
@@ -712,7 +747,7 @@ static void* scheduler_thread_func(void *arg) {
             pthread_mutex_unlock(&scheduler->lock);
         }
         
-        // Ngủ một khoảng thời gian trước khi kiểm tra lại
+        // Sleep before checking again
         sleep(scheduler->check_interval);
     }
     
@@ -751,67 +786,67 @@ static int find_task_index(Scheduler *scheduler, int task_id) {
 
 // Helper function to check if dependencies are satisfied
 static bool check_dependencies_satisfied(Scheduler *scheduler, const Task *task) {
-    // Nếu không có phụ thuộc nào, mặc định là thỏa mãn
+    // If no dependencies, default to satisfied
     if (task->dependency_count == 0) {
         return true;
     }
     
-    // Kiểm tra từng phụ thuộc
+    // Check each dependency
     for (int i = 0; i < task->dependency_count; i++) {
         int dep_id = task->dependencies[i];
         bool found = false;
         
-        // Tìm tác vụ phụ thuộc trong danh sách
+        // Find dependent task in the list
         for (int j = 0; j < scheduler->task_count; j++) {
             if (scheduler->tasks[j].id == dep_id) {
                 found = true;
                 
-                // Kiểm tra trạng thái phụ thuộc dựa trên hành vi đã xác định
+                // Check dependency status based on defined behavior
                 switch (task->dep_behavior) {
                     case DEP_ANY_SUCCESS:
                         if (scheduler->tasks[j].last_run_time > 0 && scheduler->tasks[j].exit_code == 0) {
-                            return true; // Ít nhất một task thành công
+                            return true; // At least one task succeeded
                         }
                         break;
                         
                     case DEP_ALL_SUCCESS:
                         if (scheduler->tasks[j].last_run_time <= 0 || scheduler->tasks[j].exit_code != 0) {
-                            return false; // Cần tất cả task thành công
+                            return false; // Need all tasks to succeed
                         }
                         break;
                         
                     case DEP_ANY_COMPLETION:
                         if (scheduler->tasks[j].last_run_time > 0) {
-                            return true; // Ít nhất một task hoàn thành
+                            return true; // At least one task completed
                         }
                         break;
                         
                     case DEP_ALL_COMPLETION:
                         if (scheduler->tasks[j].last_run_time <= 0) {
-                            return false; // Cần tất cả task hoàn thành
+                            return false; // Need all tasks to complete
                         }
                         break;
                         
                     default:
-                        return false; // Hành vi không xác định
+                        return false; // Undefined behavior
                 }
                 
                 break;
             }
         }
         
-        // Nếu không tìm thấy tác vụ phụ thuộc, coi như phụ thuộc không thỏa mãn
+        // If dependent task not found, dependency not satisfied
         if (!found) {
             return false;
         }
     }
     
-    // Nếu là DEP_ALL_SUCCESS hoặc DEP_ALL_COMPLETION và đã kiểm tra hết, thì trả về true
+    // If DEP_ALL_SUCCESS or DEP_ALL_COMPLETION and all checked, return true
     if (task->dep_behavior == DEP_ALL_SUCCESS || task->dep_behavior == DEP_ALL_COMPLETION) {
         return true;
     }
     
-    // Đối với DEP_ANY_SUCCESS hoặc DEP_ANY_COMPLETION, nếu đến đây thì không có task nào thỏa mãn
+    // For DEP_ANY_SUCCESS or DEP_ANY_COMPLETION, if we get here, no task satisfied the condition
     return false;
 }
 

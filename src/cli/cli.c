@@ -44,6 +44,7 @@ void cli_convert_to_command(int argc, char *argv[]);
 void cli_help(int argc, char *argv[]);
 void cli_set_api_key(int argc, char *argv[]);
 void cli_view_api_key(int argc, char *argv[]);
+void cli_create_ai_task_with_agent(int argc, char *argv[]);
 
 // Global scheduler instance
 static Scheduler scheduler;
@@ -232,6 +233,8 @@ void cli_process_command(int argc, char *argv[]) {
         cli_list_tasks(argc, argv);
     } else if (strcmp(command, "add") == 0) {
         cli_add_task(argc, argv);
+    } else if (strcmp(command, "ai-create") == 0) {
+        cli_create_ai_task_with_agent(argc, argv);
     } else if (strcmp(command, "remove") == 0) {
         cli_remove_task(argc, argv);
     } else if (strcmp(command, "enable") == 0) {
@@ -1378,7 +1381,7 @@ void cli_convert_to_command(int argc, char *argv[]) {
 void cli_convert_to_ai_dynamic(int argc, char *argv[]) {
     if (argc < 5) {
         printf("Usage: %s to-ai <task_id> <ai_prompt> <system_metrics>\n", argv[0]);
-        printf("Example: %s to-ai 1 \"Clean temporary files\" \"cpu_load,disk:/tmp\"\n", argv[0]);
+        printf("Example: %s to-ai 1 \"check disk space every 10 minutes and notify if less than 10%% free\"\n", argv[0]);
         return;
     }
     
@@ -1417,6 +1420,8 @@ void cli_help(int argc, char *argv[]) {
     printf("      -m <max_runtime> : Maximum runtime in seconds\n");
     printf("      -x <script>      : Treat as script (provide script content)\n");
     printf("      -f <script_file> : Execute script from file\n");
+    printf("  %s ai-create \"<description>\" : Create task with AI-generated command/script\n", argv[0]);
+    printf("    Example: %s ai-create \"check disk space every 10 minutes and notify if less than 10%% free\"\n", argv[0]);
     printf("  %s list              : List all tasks\n", argv[0]);
     printf("  %s view <task_id>    : View task details\n", argv[0]);
     printf("  %s remove <task_id>  : Remove a task\n", argv[0]);
@@ -1514,49 +1519,49 @@ void cli_run_interactive(const char *data_dir) {
                 continue;
             }
             
-            // Phân tích dòng lệnh thành các đối số
+            // Parse command line into arguments
             int argc = 0;
-            char *argv[64]; // Giả sử tối đa 64 đối số
+            char *argv[64]; // Assume maximum 64 arguments
             
-            // Xử lý phân tích tham số, hỗ trợ dấu ngoặc kép
+            // Process parameter parsing, supporting quoted strings
             char *p = line;
             bool in_quotes = false;
             char quote_char = '\0';
-            char token[1024] = {0}; // Bộ đệm cho token hiện tại
+            char token[1024] = {0}; // Buffer for current token
             int token_len = 0;
             
             while (*p != '\0' && argc < 63) {
                 if ((*p == '"' || *p == '\'') && (!in_quotes || *p == quote_char)) {
-                    // Bắt đầu hoặc kết thúc chuỗi trong ngoặc kép
+                    // Start or end quoted string
                     if (in_quotes) {
-                        // Kết thúc chuỗi trong ngoặc kép
+                        // End quoted string
                         in_quotes = false;
                         quote_char = '\0';
                         
-                        // Lưu token nếu có nội dung
+                        // Save token if it has content
                         if (token_len > 0) {
                             token[token_len] = '\0';
                             argv[argc++] = strdup(token);
                             token_len = 0;
                         }
                     } else {
-                        // Bắt đầu chuỗi trong ngoặc kép
+                        // Start quoted string
                         in_quotes = true;
                         quote_char = *p;
                     }
                     p++;
                 } else if (isspace((unsigned char)*p) && !in_quotes) {
-                    // Khoảng trắng ngoài ngoặc kép - kết thúc token hiện tại
+                    // Whitespace outside quotes - end current token
                     if (token_len > 0) {
                         token[token_len] = '\0';
                         argv[argc++] = strdup(token);
                         token_len = 0;
                     }
                     p++;
-                    // Bỏ qua các khoảng trắng liên tiếp
+                    // Skip consecutive whitespace
                     while (isspace((unsigned char)*p)) p++;
                 } else {
-                    // Thêm ký tự vào token hiện tại
+                    // Add character to current token
                     if (token_len < (int)(sizeof(token) - 1)) {
                         token[token_len++] = *p;
                     }
@@ -1564,30 +1569,30 @@ void cli_run_interactive(const char *data_dir) {
                 }
             }
             
-            // Xử lý token cuối cùng nếu có
+            // Process final token if exists
             if (token_len > 0) {
                 token[token_len] = '\0';
                 argv[argc++] = strdup(token);
             }
             
-            argv[argc] = NULL; // Kết thúc danh sách đối số
+            argv[argc] = NULL; // Terminate argument list
             
-            // Xử lý lệnh đặc biệt 'exit' hoặc 'quit'
+            // Process special 'exit' or 'quit' command
             if (argc > 0 && (strcmp(argv[0], "exit") == 0 || strcmp(argv[0], "quit") == 0)) {
                 running = false;
             } else if (argc > 0) {
-                // Thêm tên lệnh vào đầu danh sách đối số để phù hợp với cách gọi từ dòng lệnh
+                // Add command name to beginning of argument list to match command line invocation
                 for (int i = argc; i > 0; i--) {
                     argv[i] = argv[i-1];
                 }
-                argv[0] = "taskscheduler"; // Tên giả định của chương trình
+                argv[0] = "taskscheduler"; // Assumed program name
                 argc++;
                 
-                // Xử lý lệnh
+                // Process command
                 cli_process_command(argc, argv);
             }
             
-            // Giải phóng các tham số đã được cấp phát
+            // Free allocated parameters
             for (int i = 1; i < argc; i++) {
                 free(argv[i]);
             }
@@ -1687,5 +1692,128 @@ void cli_view_api_key(int argc, char *argv[]) {
     } else {
         printf("No API key is currently configured.\n");
         printf("Use '%s set-api-key <api_key>' to set your DeepSeek API key.\n", argv[0]);
+    }
+}
+
+void cli_create_ai_task_with_agent(int argc, char *argv[]) {
+    if (argc < 3) {
+        printf("Usage: %s ai-create \"<task description>\"\n", argv[0]);
+        printf("Example: %s ai-create \"check disk space every 10 minutes and notify if less than 10%% free\"\n", argv[0]);
+        return;
+    }
+    
+    // Verify API key is configured
+    const char *api_key = ai_get_api_key();
+    if (!api_key) {
+        printf("API key not found. Please configure it before using this feature:\n");
+        printf("  %s set-api-key <YOUR_API_KEY>\n", argv[0]);
+        return;
+    }
+    
+    // Initialize new task
+    Task task;
+    task_init(&task);
+    
+    // Get task description
+    const char *description = argv[2];
+    
+    // Generate complete task with AI
+    AIGeneratedTask ai_task;
+    printf("Generating task from description...\n");
+    
+    if (!ai_generate_complete_task(description, &ai_task)) {
+        printf("Could not generate task from description. Check logs for details.\n");
+        return;
+    }
+    
+    // Display information about the generated solution
+    printf("\nAI has generated a %s based on your description:\n", ai_task.is_script ? "script" : "command");
+    printf("-----------------------------------------------------------\n");
+    printf("%s\n", ai_task.content);
+    printf("-----------------------------------------------------------\n");
+    printf("\nSchedule: %s\n", ai_task.schedule_description);
+    if (ai_task.is_cron) {
+        printf("Cron Expression: %s\n", ai_task.cron);
+    } else {
+        printf("Interval: Every %d minutes\n", ai_task.interval_minutes);
+    }
+    printf("Suggested Name: %s\n", ai_task.suggested_name);
+    
+    // Confirm adding task
+    printf("\nDo you want to create this task? (y/n): ");
+    char confirm[10];
+    if (fgets(confirm, sizeof(confirm), stdin) == NULL || (confirm[0] != 'y' && confirm[0] != 'Y')) {
+        printf("Task creation cancelled\n");
+        return;
+    }
+    
+    // Ask for task name
+    printf("Enter a name for the task (press Enter to use suggested name): ");
+    char task_name[256];
+    if (fgets(task_name, sizeof(task_name), stdin) != NULL) {
+        // Remove newline character
+        char *nl = strchr(task_name, '\n');
+        if (nl) *nl = '\0';
+        
+        // If user didn't enter anything, use the suggested name
+        if (task_name[0] != '\0') {
+            safe_strcpy(task.name, task_name, sizeof(task.name));
+        } else {
+            safe_strcpy(task.name, ai_task.suggested_name, sizeof(task.name));
+        }
+    } else {
+        // If there's an error reading input, use suggested name
+        safe_strcpy(task.name, ai_task.suggested_name, sizeof(task.name));
+    }
+    
+    // Set execution mode and content based on AI result
+    if (ai_task.is_script) {
+        task.exec_mode = EXEC_SCRIPT;
+        safe_strcpy(task.script_content, ai_task.content, sizeof(task.script_content));
+    } else {
+        task.exec_mode = EXEC_COMMAND;
+        safe_strcpy(task.command, ai_task.content, sizeof(task.command));
+    }
+    
+    // Set schedule type based on AI result
+    if (ai_task.is_cron) {
+        task.schedule_type = SCHEDULE_CRON;
+        safe_strcpy(task.cron_expression, ai_task.cron, sizeof(task.cron_expression));
+    } else {
+        task.schedule_type = SCHEDULE_INTERVAL;
+        task.interval = ai_task.interval_minutes;
+        task.frequency = CUSTOM; // Set frequency to CUSTOM for backwards compatibility
+    }
+    
+    // Ensure task is enabled
+    task.enabled = true;
+    
+    // Calculate next run time
+    task_calculate_next_run(&task);
+    
+    // Add task to scheduler
+    int task_id = scheduler_add_task(&scheduler, task);
+    if (task_id <= 0) {
+        printf("Could not add task to scheduler\n");
+        return;
+    }
+    
+    printf("Task successfully added with ID %d\n", task_id);
+    
+    // Display schedule
+    char next_run[64] = "Not scheduled";
+    if (task.next_run_time > 0) {
+        time_t next = task.next_run_time;
+        struct tm *tm_info = localtime(&next);
+        strftime(next_run, sizeof(next_run), "%Y-%m-%d %H:%M:%S", tm_info);
+    }
+    
+    if (task.schedule_type == SCHEDULE_INTERVAL) {
+        printf("Task will run every %d minutes, starting at: %s\n", task.interval, next_run);
+    } else if (task.schedule_type == SCHEDULE_CRON) {
+        printf("Task will run according to cron expression: %s\n", task.cron_expression);
+        printf("Next run: %s\n", next_run);
+    } else {
+        printf("Task is manually scheduled\n");
     }
 }

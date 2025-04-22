@@ -18,6 +18,31 @@ typedef struct {
     size_t size;
 } AIResponse;
 
+// Định nghĩa cấu trúc dữ liệu cho kết quả phân tích lịch
+typedef struct {
+    bool is_cron;                // True nếu kết quả là biểu thức cron, false nếu là interval
+    union {
+        char cron[128];          // Biểu thức cron nếu is_cron = true
+        int interval_minutes;    // Khoảng thời gian theo phút nếu is_cron = false
+    };
+    char explanation[256];       // Giải thích về lịch trình đã phân tích
+} AIScheduleAnalysis;
+
+// Cấu trúc dữ liệu chứa tất cả thông tin tác vụ được tạo bởi AI
+typedef struct {
+    bool is_script;              // True nếu là script, false nếu là lệnh
+    char content[8192];          // Nội dung lệnh hoặc script
+    
+    bool is_cron;                // True nếu lịch trình là cron, false nếu là interval
+    union {
+        char cron[128];          // Biểu thức cron nếu is_cron = true
+        int interval_minutes;    // Khoảng thời gian theo phút nếu is_cron = false
+    };
+    
+    char schedule_description[256]; // Mô tả lịch trình bằng ngôn ngữ tự nhiên
+    char suggested_name[128];    // Tên đề xuất cho tác vụ
+} AIGeneratedTask;
+
 /**
  * Gọi Deepseek API với các tham số đã cho
  * 
@@ -76,5 +101,38 @@ const char* ai_get_api_key();
  * @return Chuỗi lệnh được tạo ra, NULL nếu thất bại
  */
 char* ai_generate_command(const SystemMetrics *metrics, const char *goal);
+
+/**
+ * Tạo lệnh/script dựa vào mô tả ngôn ngữ tự nhiên. AI đóng vai trò như một 
+ * agent để tạo shell command hoặc script thực hiện nhiệm vụ được mô tả
+ * 
+ * @param description Mô tả nhiệm vụ bằng ngôn ngữ tự nhiên
+ * @param is_script Tham số đầu ra, true nếu kết quả là script, false nếu là lệnh
+ * @param cmd_or_script Tham số đầu ra, buffer để lưu lệnh hoặc script
+ * @param buffer_size Kích thước của buffer
+ * @return true nếu thành công, false nếu thất bại
+ */
+bool ai_generate_shell_solution(const char *description, bool *is_script, 
+                              char *cmd_or_script, size_t buffer_size);
+
+/**
+ * Sử dụng AI để phân tích mô tả lịch trình bằng ngôn ngữ tự nhiên và trả về
+ * biểu thức cron hoặc khoảng thời gian thích hợp
+ * 
+ * @param description Mô tả lịch trình bằng ngôn ngữ tự nhiên
+ * @param result Kết quả phân tích được lưu vào đây
+ * @return true nếu thành công, false nếu thất bại
+ */
+bool ai_analyze_schedule(const char *description, AIScheduleAnalysis *result);
+
+/**
+ * Tạo tác vụ hoàn chỉnh từ mô tả ngôn ngữ tự nhiên, bao gồm cả lệnh/script và lịch trình
+ * Hàm này sẽ tạo ra tất cả thông tin cần thiết để tạo một tác vụ mới, chỉ từ mô tả
+ * 
+ * @param description Mô tả tác vụ bằng ngôn ngữ tự nhiên
+ * @param result Kết quả được lưu vào đây
+ * @return true nếu thành công, false nếu thất bại
+ */
+bool ai_generate_complete_task(const char *description, AIGeneratedTask *result);
 
 #endif /* AI_H */ 

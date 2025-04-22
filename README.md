@@ -70,26 +70,39 @@ Sau đó truy cập:
 http://localhost:5000
 ```
 
-## Tính năng AI Dynamic
+## Tính năng AI 
 
-Tác vụ AI Dynamic sử dụng mô hình DeepSeek để tạo lệnh tự động dựa trên thông số hệ thống hiện tại và mục tiêu được chỉ định.
+Task Scheduler cung cấp hai tính năng AI mạnh mẽ:
 
-### Thiết lập API Key
+### 1. AI Agent - Tạo Task từ Mô tả Ngôn ngữ Tự nhiên
+
+Tính năng này cho phép tạo task chỉ cần dùng mô tả bằng ngôn ngữ tự nhiên. AI sẽ tự động phân tích yêu cầu, tạo ra lệnh shell hoặc script phù hợp, rồi hỏi người dùng xác nhận và tên cho task.
+
+```bash
+# Create a new task using the AI Agent - just describe it in natural language
+./bin/taskscheduler ai-create "check disk space every 10 minutes and notify if less than 10% free"
+
+# Create a task to clean temp files at midnight
+./bin/taskscheduler ai-create "clean temporary files in /tmp daily at midnight"
+```
+
+AI sẽ:
+1. Tự động tạo lệnh đơn giản hoặc script đầy đủ tùy theo độ phức tạp của yêu cầu
+2. Tự phân tích khoảng thời gian từ mô tả (ví dụ: "every 1 minute", "every 10 minutes", "daily", "midnight")
+3. Hiển thị lệnh/script để người dùng xác nhận bằng tiếng Anh
+4. Hỏi tên task (hoặc sử dụng mô tả làm tên nếu không có tên được cung cấp)
+
+Với quy trình đơn giản này, người dùng không cần phải chỉ định các tham số phức tạp như khoảng thời gian, cron expression hay thư mục làm việc.
+
+### 2. AI Dynamic - Tạo lệnh dựa trên Metrics Hệ thống
+
+Tính năng này tạo và thực thi lệnh dựa trên thông số hệ thống thời gian thực.
 
 ```bash
 # Thiết lập API key
 ./bin/taskscheduler set-api-key your_deepseek_api_key_here
 
-# Xem thông tin API key đã cấu hình
-./bin/taskscheduler view-api-key
-```
-
-API key sẽ được lưu trong file `data/config.json` và sẽ được sử dụng khi thực thi tác vụ AI Dynamic.
-
-### Tạo tác vụ AI Dynamic
-
-```bash
-# Tạo tác vụ AI mới
+# Chuyển đổi task sang AI Dynamic
 ./bin/taskscheduler to-ai <task_id> "<mô tả mục tiêu>" "<thông số hệ thống>"
 
 # Ví dụ
