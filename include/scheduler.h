@@ -142,9 +142,12 @@ bool scheduler_remove_dependency(Scheduler *scheduler, int task_id, int dependen
  * @param scheduler Pointer to the scheduler structure
  * @param task_id ID of the task to set execution mode
  * @param mode Execution mode for the task
- * @param script_content Content of the script for the task
+ * @param script_content Content of the script for EXEC_SCRIPT mode
+ * @param ai_prompt AI prompt for EXEC_AI_DYNAMIC mode
+ * @param system_metrics System metrics to monitor for EXEC_AI_DYNAMIC mode
  * @return true on success, false on failure
  */
-bool scheduler_set_exec_mode(Scheduler *scheduler, int task_id, TaskExecMode mode, const char *script_content);
+bool scheduler_set_exec_mode(Scheduler *scheduler, int task_id, TaskExecMode mode, 
+                           const char *script_content, const char *ai_prompt, const char *system_metrics);
 
 #endif /* SCHEDULER_H */ 

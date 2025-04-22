@@ -6,6 +6,8 @@
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 bool task_init(Task *task) {
     if (!task) {
@@ -152,8 +154,8 @@ bool task_calculate_next_run(Task *task) {
             
             // If we haven't run today and the time is still in the future, run today
             if (task->last_run_time < now - 86400 && 
-                local_time->tm_hour < next_time.tm_hour ||
-                (local_time->tm_hour == next_time.tm_hour && local_time->tm_min < next_time.tm_min)) {
+                (local_time->tm_hour < next_time.tm_hour ||
+                (local_time->tm_hour == next_time.tm_hour && local_time->tm_min < next_time.tm_min))) {
                 next_time.tm_mday -= 1;
                 next_run = mktime(&next_time);
             }

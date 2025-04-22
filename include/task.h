@@ -3,6 +3,7 @@
 
 #include <time.h>
 #include <stdbool.h>
+#include "ai.h"
 
 // Giới hạn tối đa số lượng tác vụ phụ thuộc
 #define MAX_DEPENDENCIES 10
@@ -32,8 +33,9 @@ typedef enum {
  * Enum for task execution mode
  */
 typedef enum {
-    EXEC_COMMAND,   // Execute a command directly
-    EXEC_SCRIPT     // Execute a script file
+    EXEC_COMMAND,     // Execute a command directly
+    EXEC_SCRIPT,      // Execute a script file
+    EXEC_AI_DYNAMIC   // Execute AI-generated command based on system metrics
 } TaskExecMode;
 
 /**
@@ -74,6 +76,10 @@ typedef struct {
     
     // Script content (if exec_mode is EXEC_SCRIPT)
     char script_content[SCRIPT_CONTENT_MAX_LENGTH];  // Content of the script if stored in DB
+    
+    // AI-Dynamic execution (if exec_mode is EXEC_AI_DYNAMIC)
+    char ai_prompt[2048];              // AI prompt/goal for dynamic command generation
+    char system_metrics[512];          // Comma-separated metrics to monitor (e.g., "disk:/,cpu_load,mem_free")
     
     // Schedule type
     ScheduleType schedule_type; // How this task is scheduled

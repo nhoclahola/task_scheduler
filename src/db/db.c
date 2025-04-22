@@ -27,7 +27,9 @@ static const char *CREATE_TABLE_SQL =
     "script_content TEXT, "
     "dep_behavior INTEGER NOT NULL DEFAULT 0, "
     "schedule_type INTEGER NOT NULL DEFAULT 0, "
-    "cron_expression TEXT"
+    "cron_expression TEXT, "
+    "ai_prompt TEXT, "
+    "system_metrics TEXT"
     ");"
     
     "CREATE TABLE IF NOT EXISTS dependencies ("
@@ -42,15 +44,17 @@ static const char *INSERT_TASK_SQL =
     "INSERT INTO tasks ("
     "id, name, command, creation_time, next_run_time, last_run_time, "
     "frequency, interval, enabled, exit_code, max_runtime, working_dir, "
-    "exec_mode, script_content, dep_behavior, schedule_type, cron_expression"
-    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+    "exec_mode, script_content, dep_behavior, schedule_type, cron_expression, "
+    "ai_prompt, system_metrics"
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
 
 static const char *UPDATE_TASK_SQL =
     "UPDATE tasks SET "
     "name = ?, command = ?, next_run_time = ?, last_run_time = ?, "
     "frequency = ?, interval = ?, enabled = ?, exit_code = ?, "
     "max_runtime = ?, working_dir = ?, exec_mode = ?, script_content = ?, "
-    "dep_behavior = ?, schedule_type = ?, cron_expression = ? "
+    "dep_behavior = ?, schedule_type = ?, cron_expression = ?, "
+    "ai_prompt = ?, system_metrics = ? "
     "WHERE id = ?;";
 
 static const char *DELETE_TASK_SQL =
@@ -198,25 +202,21 @@ bool db_save_task(const Task *task) {
     if (db == NULL || task == NULL) {
         return false;
     }
-
-    // Begin transaction
-    sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL, NULL);
-
+    
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, INSERT_TASK_SQL, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         log_message(LOG_ERROR, "Failed to prepare statement: %s", sqlite3_errmsg(db));
-        sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
         return false;
     }
-
-    // Bind values to the statement
+    
+    // Bind parameters
     sqlite3_bind_int(stmt, 1, task->id);
     sqlite3_bind_text(stmt, 2, task->name, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 3, task->command, -1, SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 4, (sqlite3_int64)task->creation_time);
-    sqlite3_bind_int64(stmt, 5, (sqlite3_int64)task->next_run_time);
-    sqlite3_bind_int64(stmt, 6, (sqlite3_int64)task->last_run_time);
+    sqlite3_bind_int64(stmt, 4, task->creation_time);
+    sqlite3_bind_int64(stmt, 5, task->next_run_time);
+    sqlite3_bind_int64(stmt, 6, task->last_run_time);
     sqlite3_bind_int(stmt, 7, task->frequency);
     sqlite3_bind_int(stmt, 8, task->interval);
     sqlite3_bind_int(stmt, 9, task->enabled ? 1 : 0);
@@ -228,30 +228,27 @@ bool db_save_task(const Task *task) {
     sqlite3_bind_int(stmt, 15, task->dep_behavior);
     sqlite3_bind_int(stmt, 16, task->schedule_type);
     sqlite3_bind_text(stmt, 17, task->cron_expression, -1, SQLITE_STATIC);
-
+    sqlite3_bind_text(stmt, 18, task->ai_prompt, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 19, task->system_metrics, -1, SQLITE_STATIC);
+    
     // Execute the statement
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
-
+    
     if (rc != SQLITE_DONE) {
         log_message(LOG_ERROR, "Failed to insert task: %s", sqlite3_errmsg(db));
-        sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
         return false;
     }
-
-    // Save dependencies
+    
+    // Save task dependencies
     if (task->dependency_count > 0) {
         if (!save_task_dependencies(task->id, task->dependencies, task->dependency_count)) {
             log_message(LOG_ERROR, "Failed to save task dependencies");
-            sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
             return false;
         }
     }
-
-    // Commit the transaction
-    sqlite3_exec(db, "COMMIT;", NULL, NULL, NULL);
-
-    log_message(LOG_INFO, "Task saved to database: ID=%d", task->id);
+    
+    log_message(LOG_INFO, "Task saved: ID=%d, Name=%s", task->id, task->name);
     return true;
 }
 
@@ -259,23 +256,19 @@ bool db_update_task(const Task *task) {
     if (db == NULL || task == NULL) {
         return false;
     }
-
-    // Begin transaction
-    sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL, NULL);
-
+    
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, UPDATE_TASK_SQL, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         log_message(LOG_ERROR, "Failed to prepare statement: %s", sqlite3_errmsg(db));
-        sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
         return false;
     }
-
-    // Bind values to the statement
+    
+    // Bind parameters
     sqlite3_bind_text(stmt, 1, task->name, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, task->command, -1, SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 3, (sqlite3_int64)task->next_run_time);
-    sqlite3_bind_int64(stmt, 4, (sqlite3_int64)task->last_run_time);
+    sqlite3_bind_int64(stmt, 3, task->next_run_time);
+    sqlite3_bind_int64(stmt, 4, task->last_run_time);
     sqlite3_bind_int(stmt, 5, task->frequency);
     sqlite3_bind_int(stmt, 6, task->interval);
     sqlite3_bind_int(stmt, 7, task->enabled ? 1 : 0);
@@ -287,29 +280,26 @@ bool db_update_task(const Task *task) {
     sqlite3_bind_int(stmt, 13, task->dep_behavior);
     sqlite3_bind_int(stmt, 14, task->schedule_type);
     sqlite3_bind_text(stmt, 15, task->cron_expression, -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 16, task->id);
-
+    sqlite3_bind_text(stmt, 16, task->ai_prompt, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 17, task->system_metrics, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 18, task->id);
+    
     // Execute the statement
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
-
+    
     if (rc != SQLITE_DONE) {
         log_message(LOG_ERROR, "Failed to update task: %s", sqlite3_errmsg(db));
-        sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
         return false;
     }
-
-    // Update dependencies
+    
+    // Update task dependencies
     if (!save_task_dependencies(task->id, task->dependencies, task->dependency_count)) {
         log_message(LOG_ERROR, "Failed to update task dependencies");
-        sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
         return false;
     }
-
-    // Commit the transaction
-    sqlite3_exec(db, "COMMIT;", NULL, NULL, NULL);
-
-    log_message(LOG_INFO, "Task updated in database: ID=%d", task->id);
+    
+    log_message(LOG_INFO, "Task updated: ID=%d, Name=%s", task->id, task->name);
     return true;
 }
 
@@ -373,57 +363,74 @@ bool db_load_tasks(Task **tasks, int *count) {
     if (db == NULL || tasks == NULL || count == NULL) {
         return false;
     }
-
+    
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, SELECT_ALL_TASKS_SQL, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         log_message(LOG_ERROR, "Failed to prepare statement: %s", sqlite3_errmsg(db));
         return false;
     }
-
-    // Count the number of tasks
+    
+    // Count tasks first
     int task_count = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         task_count++;
     }
-
-    // Reset the statement to start from the beginning
     sqlite3_reset(stmt);
-
-    // Allocate memory for tasks
-    *tasks = NULL;
-    *count = 0;
-
+    
     if (task_count == 0) {
+        *tasks = NULL;
+        *count = 0;
         sqlite3_finalize(stmt);
-        return true; // No tasks, not an error
+        return true;
     }
-
-    *tasks = (Task*)malloc(sizeof(Task) * task_count);
-    if (*tasks == NULL) {
+    
+    // Allocate memory for tasks
+    Task *result = (Task*)malloc(sizeof(Task) * task_count);
+    if (!result) {
         log_message(LOG_ERROR, "Failed to allocate memory for tasks");
         sqlite3_finalize(stmt);
         return false;
     }
-
-    // Load all tasks
-    int index = 0;
+    
+    // Load tasks
+    int i = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
-        Task *task = &(*tasks)[index++];
-
+        Task *task = &result[i];
+        
         task->id = sqlite3_column_int(stmt, 0);
-        safe_strcpy(task->name, (const char*)sqlite3_column_text(stmt, 1), sizeof(task->name));
-        safe_strcpy(task->command, (const char*)sqlite3_column_text(stmt, 2), sizeof(task->command));
-        task->creation_time = (time_t)sqlite3_column_int64(stmt, 3);
-        task->next_run_time = (time_t)sqlite3_column_int64(stmt, 4);
-        task->last_run_time = (time_t)sqlite3_column_int64(stmt, 5);
-        task->frequency = (TaskFrequency)sqlite3_column_int(stmt, 6);
+        
+        const char *name = (const char*)sqlite3_column_text(stmt, 1);
+        if (name) {
+            safe_strcpy(task->name, name, sizeof(task->name));
+        } else {
+            task->name[0] = '\0';
+        }
+        
+        const char *command = (const char*)sqlite3_column_text(stmt, 2);
+        if (command) {
+            safe_strcpy(task->command, command, sizeof(task->command));
+        } else {
+            task->command[0] = '\0';
+        }
+        
+        task->creation_time = sqlite3_column_int64(stmt, 3);
+        task->next_run_time = sqlite3_column_int64(stmt, 4);
+        task->last_run_time = sqlite3_column_int64(stmt, 5);
+        task->frequency = sqlite3_column_int(stmt, 6);
         task->interval = sqlite3_column_int(stmt, 7);
         task->enabled = sqlite3_column_int(stmt, 8) != 0;
         task->exit_code = sqlite3_column_int(stmt, 9);
         task->max_runtime = sqlite3_column_int(stmt, 10);
-        safe_strcpy(task->working_dir, (const char*)sqlite3_column_text(stmt, 11), sizeof(task->working_dir));
-        task->exec_mode = (TaskExecMode)sqlite3_column_int(stmt, 12);
+        
+        const char *working_dir = (const char*)sqlite3_column_text(stmt, 11);
+        if (working_dir) {
+            safe_strcpy(task->working_dir, working_dir, sizeof(task->working_dir));
+        } else {
+            task->working_dir[0] = '\0';
+        }
+        
+        task->exec_mode = sqlite3_column_int(stmt, 12);
         
         const char *script_content = (const char*)sqlite3_column_text(stmt, 13);
         if (script_content) {
@@ -432,14 +439,28 @@ bool db_load_tasks(Task **tasks, int *count) {
             task->script_content[0] = '\0';
         }
         
-        task->dep_behavior = (DependencyBehavior)sqlite3_column_int(stmt, 14);
-        task->schedule_type = (ScheduleType)sqlite3_column_int(stmt, 15);
+        task->dep_behavior = sqlite3_column_int(stmt, 14);
+        task->schedule_type = sqlite3_column_int(stmt, 15);
         
-        const char *cron_expression = (const char*)sqlite3_column_text(stmt, 16);
-        if (cron_expression) {
-            safe_strcpy(task->cron_expression, cron_expression, sizeof(task->cron_expression));
+        const char *cron_expr = (const char*)sqlite3_column_text(stmt, 16);
+        if (cron_expr) {
+            safe_strcpy(task->cron_expression, cron_expr, sizeof(task->cron_expression));
         } else {
             task->cron_expression[0] = '\0';
+        }
+        
+        const char *ai_prompt = (const char*)sqlite3_column_text(stmt, 17);
+        if (ai_prompt) {
+            safe_strcpy(task->ai_prompt, ai_prompt, sizeof(task->ai_prompt));
+        } else {
+            task->ai_prompt[0] = '\0';
+        }
+        
+        const char *system_metrics = (const char*)sqlite3_column_text(stmt, 18);
+        if (system_metrics) {
+            safe_strcpy(task->system_metrics, system_metrics, sizeof(task->system_metrics));
+        } else {
+            task->system_metrics[0] = '\0';
         }
         
         // Load dependencies
@@ -447,51 +468,71 @@ bool db_load_tasks(Task **tasks, int *count) {
             log_message(LOG_WARNING, "Failed to load dependencies for task %d", task->id);
             task->dependency_count = 0;
         }
+        
+        i++;
     }
-
+    
     sqlite3_finalize(stmt);
+    
+    *tasks = result;
     *count = task_count;
-
-    log_message(LOG_INFO, "Loaded %d tasks from database", task_count);
+    
     return true;
 }
 
 bool db_get_task(int task_id, Task *task) {
-    if (db == NULL || task == NULL) {
+    if (db == NULL || task_id < 0 || task == NULL) {
         return false;
     }
-
+    
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, SELECT_TASK_BY_ID_SQL, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         log_message(LOG_ERROR, "Failed to prepare statement: %s", sqlite3_errmsg(db));
         return false;
     }
-
-    // Bind the task ID
+    
     sqlite3_bind_int(stmt, 1, task_id);
-
-    // Execute the statement
-    rc = sqlite3_step(stmt);
-    if (rc != SQLITE_ROW) {
+    
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+        log_message(LOG_WARNING, "Task not found: ID=%d", task_id);
         sqlite3_finalize(stmt);
-        return false; // Task not found
+        return false;
     }
-
-    // Load task data
+    
     task->id = sqlite3_column_int(stmt, 0);
-    safe_strcpy(task->name, (const char*)sqlite3_column_text(stmt, 1), sizeof(task->name));
-    safe_strcpy(task->command, (const char*)sqlite3_column_text(stmt, 2), sizeof(task->command));
-    task->creation_time = (time_t)sqlite3_column_int64(stmt, 3);
-    task->next_run_time = (time_t)sqlite3_column_int64(stmt, 4);
-    task->last_run_time = (time_t)sqlite3_column_int64(stmt, 5);
-    task->frequency = (TaskFrequency)sqlite3_column_int(stmt, 6);
+    
+    const char *name = (const char*)sqlite3_column_text(stmt, 1);
+    if (name) {
+        safe_strcpy(task->name, name, sizeof(task->name));
+    } else {
+        task->name[0] = '\0';
+    }
+    
+    const char *command = (const char*)sqlite3_column_text(stmt, 2);
+    if (command) {
+        safe_strcpy(task->command, command, sizeof(task->command));
+    } else {
+        task->command[0] = '\0';
+    }
+    
+    task->creation_time = sqlite3_column_int64(stmt, 3);
+    task->next_run_time = sqlite3_column_int64(stmt, 4);
+    task->last_run_time = sqlite3_column_int64(stmt, 5);
+    task->frequency = sqlite3_column_int(stmt, 6);
     task->interval = sqlite3_column_int(stmt, 7);
     task->enabled = sqlite3_column_int(stmt, 8) != 0;
     task->exit_code = sqlite3_column_int(stmt, 9);
     task->max_runtime = sqlite3_column_int(stmt, 10);
-    safe_strcpy(task->working_dir, (const char*)sqlite3_column_text(stmt, 11), sizeof(task->working_dir));
-    task->exec_mode = (TaskExecMode)sqlite3_column_int(stmt, 12);
+    
+    const char *working_dir = (const char*)sqlite3_column_text(stmt, 11);
+    if (working_dir) {
+        safe_strcpy(task->working_dir, working_dir, sizeof(task->working_dir));
+    } else {
+        task->working_dir[0] = '\0';
+    }
+    
+    task->exec_mode = sqlite3_column_int(stmt, 12);
     
     const char *script_content = (const char*)sqlite3_column_text(stmt, 13);
     if (script_content) {
@@ -500,14 +541,28 @@ bool db_get_task(int task_id, Task *task) {
         task->script_content[0] = '\0';
     }
     
-    task->dep_behavior = (DependencyBehavior)sqlite3_column_int(stmt, 14);
-    task->schedule_type = (ScheduleType)sqlite3_column_int(stmt, 15);
+    task->dep_behavior = sqlite3_column_int(stmt, 14);
+    task->schedule_type = sqlite3_column_int(stmt, 15);
     
-    const char *cron_expression = (const char*)sqlite3_column_text(stmt, 16);
-    if (cron_expression) {
-        safe_strcpy(task->cron_expression, cron_expression, sizeof(task->cron_expression));
+    const char *cron_expr = (const char*)sqlite3_column_text(stmt, 16);
+    if (cron_expr) {
+        safe_strcpy(task->cron_expression, cron_expr, sizeof(task->cron_expression));
     } else {
         task->cron_expression[0] = '\0';
+    }
+    
+    const char *ai_prompt = (const char*)sqlite3_column_text(stmt, 17);
+    if (ai_prompt) {
+        safe_strcpy(task->ai_prompt, ai_prompt, sizeof(task->ai_prompt));
+    } else {
+        task->ai_prompt[0] = '\0';
+    }
+    
+    const char *system_metrics = (const char*)sqlite3_column_text(stmt, 18);
+    if (system_metrics) {
+        safe_strcpy(task->system_metrics, system_metrics, sizeof(task->system_metrics));
+    } else {
+        task->system_metrics[0] = '\0';
     }
     
     sqlite3_finalize(stmt);
@@ -517,7 +572,7 @@ bool db_get_task(int task_id, Task *task) {
         log_message(LOG_WARNING, "Failed to load dependencies for task %d", task->id);
         task->dependency_count = 0;
     }
-
+    
     return true;
 }
 

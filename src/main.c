@@ -3,6 +3,7 @@
 #include "../include/cli.h"
 #include "../include/utils.h"
 #include "../include/db.h"
+#include "../include/ai.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

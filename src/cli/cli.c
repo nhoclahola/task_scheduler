@@ -2,6 +2,8 @@
 #include "../../include/scheduler.h"
 #include "../../include/task.h"
 #include "../../include/utils.h"
+#include "../../include/db.h"
+#include "../../include/ai.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,9 +38,34 @@ static const char *commands[] = {
 // Helper function for trimming whitespace
 static void trim_whitespace(char *str);
 
+// Khai báo tiên quyết
+void cli_convert_to_ai_dynamic(int argc, char *argv[]);
+void cli_convert_to_command(int argc, char *argv[]);
+void cli_help(int argc, char *argv[]);
+void cli_set_api_key(int argc, char *argv[]);
+void cli_view_api_key(int argc, char *argv[]);
+
 // Global scheduler instance
 static Scheduler scheduler;
 static bool scheduler_initialized = false;
+
+// Hàm để lấy tên tương ứng cho TaskFrequency
+static const char* cli_get_frequency_name(TaskFrequency freq) {
+    switch (freq) {
+        case ONCE:
+            return "Once";
+        case DAILY:
+            return "Daily";
+        case WEEKLY:
+            return "Weekly";
+        case MONTHLY:
+            return "Monthly";
+        case CUSTOM:
+            return "Custom";
+        default:
+            return "Unknown";
+    }
+}
 
 bool cli_parse_args(int argc, char **argv, CliOptions *options) {
     if (!options) {
@@ -199,22 +226,38 @@ void cli_process_command(int argc, char *argv[]) {
     
     const char *command = argv[1];
     
-    if (strcmp(command, "add") == 0) {
-        cli_add_task(argc, argv);
+    if (strcmp(command, "help") == 0) {
+        cli_help(argc, argv);
     } else if (strcmp(command, "list") == 0) {
         cli_list_tasks(argc, argv);
+    } else if (strcmp(command, "add") == 0) {
+        cli_add_task(argc, argv);
     } else if (strcmp(command, "remove") == 0) {
         cli_remove_task(argc, argv);
-    } else if (strcmp(command, "run") == 0) {
-        cli_run_task(argc, argv);
     } else if (strcmp(command, "enable") == 0) {
         cli_enable_task(argc, argv);
     } else if (strcmp(command, "disable") == 0) {
         cli_disable_task(argc, argv);
+    } else if (strcmp(command, "run") == 0) {
+        cli_run_task(argc, argv);
     } else if (strcmp(command, "view") == 0) {
         cli_view_task(argc, argv);
     } else if (strcmp(command, "edit") == 0) {
         cli_edit_task(argc, argv);
+    } else if (strcmp(command, "start") == 0) {
+        if (scheduler_start(&scheduler)) {
+            printf("Scheduler started\n");
+        } else {
+            printf("Failed to start scheduler\n");
+        }
+    } else if (strcmp(command, "stop") == 0) {
+        if (scheduler_stop(&scheduler)) {
+            printf("Scheduler stopped\n");
+        } else {
+            printf("Failed to stop scheduler\n");
+        }
+    } else if (strcmp(command, "exit") == 0 || strcmp(command, "quit") == 0) {
+        exit(0);
     } else if (strcmp(command, "add-dep") == 0) {
         cli_add_dependency(argc, argv);
     } else if (strcmp(command, "remove-dep") == 0) {
@@ -225,10 +268,12 @@ void cli_process_command(int argc, char *argv[]) {
         cli_convert_to_script(argc, argv);
     } else if (strcmp(command, "to-command") == 0) {
         cli_convert_to_command(argc, argv);
-    } else if (strcmp(command, "help") == 0) {
-        cli_help(argc, argv);
-    } else if (strcmp(command, "exit") == 0 || strcmp(command, "quit") == 0) {
-        // Không làm gì, sẽ được xử lý ở hàm cli_run_interactive
+    } else if (strcmp(command, "to-ai") == 0) {
+        cli_convert_to_ai_dynamic(argc, argv);
+    } else if (strcmp(command, "set-api-key") == 0) {
+        cli_set_api_key(argc, argv);
+    } else if (strcmp(command, "view-api-key") == 0) {
+        cli_view_api_key(argc, argv);
     } else {
         printf("Unknown command: %s\n", command);
         cli_help(argc, argv);
@@ -240,100 +285,94 @@ void cli_display_task(const Task *task, bool detailed) {
         return;
     }
     
-    // Format times
-    char creation_time_str[32] = "Unknown";
-    char next_run_time_str[32] = "Unknown";
-    char last_run_time_str[32] = "Unknown";
+    const char *frequency_name = cli_get_frequency_name(task->frequency);
+    const char *mode_name;
     
-    if (task->creation_time > 0) {
-        struct tm *tm_info = localtime(&task->creation_time);
-        strftime(creation_time_str, sizeof(creation_time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+    switch (task->exec_mode) {
+        case EXEC_SCRIPT:
+            mode_name = "Script";
+            break;
+        case EXEC_AI_DYNAMIC:
+            mode_name = "AI Dynamic";
+            break;
+        case EXEC_COMMAND:
+        default:
+            mode_name = "Command";
+            break;
     }
     
-    if (task->next_run_time > 0) {
-        struct tm *tm_info = localtime(&task->next_run_time);
-        strftime(next_run_time_str, sizeof(next_run_time_str), "%Y-%m-%d %H:%M:%S", tm_info);
-    } else {
-        strcpy(next_run_time_str, "Not scheduled");
+    printf("Task ID: %d\n", task->id);
+    printf("Name: %s\n", task->name);
+    printf("Enabled: %s\n", task->enabled ? "Yes" : "No");
+    printf("Execution Mode: %s\n", mode_name);
+
+    if (task->exec_mode == EXEC_COMMAND) {
+        printf("Command: %s\n", task->command);
+    } else if (task->exec_mode == EXEC_SCRIPT) {
+        printf("Script Content:\n%s\n", task->script_content);
+    } else if (task->exec_mode == EXEC_AI_DYNAMIC) {
+        printf("AI Prompt: %s\n", task->ai_prompt);
+        printf("System Metrics: %s\n", task->system_metrics);
     }
     
-    if (task->last_run_time > 0) {
-        struct tm *tm_info = localtime(&task->last_run_time);
-        strftime(last_run_time_str, sizeof(last_run_time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+    printf("Frequency: %s\n", frequency_name);
+    
+    if (task->frequency != ONCE) {
+        printf("Interval: %d %s\n", task->interval, 
+              (task->frequency == DAILY) ? "days" : 
+              (task->frequency == WEEKLY) ? "weeks" : 
+              (task->frequency == MONTHLY) ? "months" : "minutes");
+    }
+    
+    char time_buf[64];
+    time_t creation = task->creation_time;
+    if (creation > 0) {
+        struct tm *tm_info = localtime(&creation);
+        strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+        printf("Created: %s\n", time_buf);
     } else {
-        strcpy(last_run_time_str, "Never");
+        printf("Created: N/A\n");
+    }
+    
+    time_t last = task->last_run_time;
+    if (last > 0) {
+        struct tm *tm_info = localtime(&last);
+        strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+        printf("Last Run: %s (Exit Code: %d)\n", time_buf, task->exit_code);
+    } else {
+        printf("Last Run: Never\n");
+    }
+    
+    time_t next = task->next_run_time;
+    if (next > 0) {
+        struct tm *tm_info = localtime(&next);
+        strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+        printf("Next Run: %s\n", time_buf);
+    } else {
+        printf("Next Run: N/A\n");
     }
     
     if (detailed) {
-        printf("Task ID: %d\n", task->id);
-        printf("  Name: %s\n", task->name);
-        printf("  Type: %s\n", task->exec_mode == EXEC_COMMAND ? "Command" : "Script");
+        printf("Working Directory: %s\n", task->working_dir[0] ? task->working_dir : "Default");
+        printf("Max Runtime: %d seconds (0 = unlimited)\n", task->max_runtime);
         
-        if (task->exec_mode == EXEC_COMMAND) {
-            printf("  Command: %s\n", task->command);
-        } else {
-            printf("  Script Size: %ld bytes\n", strlen(task->script_content));
-        }
-        
-        printf("  Working Directory: %s\n", task->working_dir[0] ? task->working_dir : "(current)");
-        printf("  Created: %s\n", creation_time_str);
-        printf("  Status: %s\n", task->enabled ? "Enabled" : "Disabled");
-        
-        printf("  Schedule: ");
-        if (task->schedule_type == SCHEDULE_INTERVAL) {
-            printf("Every %d minutes\n", task->interval);
-        } else if (task->schedule_type == SCHEDULE_CRON) {
-            printf("Cron: %s\n", task->cron_expression);
-        } else {
-            printf("Manual\n");
-        }
-        
-        printf("  Last Run: %s\n", last_run_time_str);
-        printf("  Next Run: %s\n", next_run_time_str);
-        
-        if (task->last_run_time > 0) {
-            printf("  Last Exit Code: %d\n", task->exit_code);
-        }
-        
-        printf("  Max Runtime: %d seconds\n", task->max_runtime);
-        
-        // Show dependencies if any
         if (task->dependency_count > 0) {
-            printf("  Dependencies: ");
+            printf("Dependencies: ");
             for (int i = 0; i < task->dependency_count; i++) {
-                printf("%d", task->dependencies[i]);
-                if (i < task->dependency_count - 1) {
-                    printf(", ");
-                }
+                printf("%d ", task->dependencies[i]);
             }
             printf("\n");
             
-            // Show dependency behavior
-            printf("  Dependency Behavior: ");
-            switch (task->dep_behavior) {
-                case DEP_ANY_SUCCESS:
-                    printf("Any Success\n");
-                    break;
-                case DEP_ALL_SUCCESS:
-                    printf("All Success\n");
-                    break;
-                case DEP_ANY_COMPLETION:
-                    printf("Any Completion\n");
-                    break;
-                case DEP_ALL_COMPLETION:
-                    printf("All Completion\n");
-                    break;
-                default:
-                    printf("Unknown\n");
-            }
+            const char *behavior_names[] = {
+                "Any Success", "All Success", 
+                "Any Completion", "All Completion"
+            };
+            printf("Dependency Behavior: %s\n", behavior_names[task->dep_behavior]);
         }
-    } else {
-        // Simplified display
-        printf("%-4d %-20s %-8s %-20s %-20s %s\n", 
-               task->id, task->name, 
-               task->exec_mode == EXEC_COMMAND ? "Command" : "Script", 
-               last_run_time_str, next_run_time_str,
-               task->enabled ? "Enabled" : "Disabled");
+        
+        if (task->schedule_type == SCHEDULE_CRON) {
+            printf("Cron Expression: %s\n", task->cron_expression);
+        }
     }
 }
 
@@ -672,12 +711,31 @@ void cli_list_tasks(int argc, char *argv[]) {
         printf("ID: %d\n", task->id);
         printf("Name: %s\n", task->name);
         printf("Enabled: %s\n", task->enabled ? "Yes" : "No");
-        printf("Type: %s\n", task->exec_mode == EXEC_COMMAND ? "Command" : "Script");
+        
+        // Hiển thị loại tác vụ dựa trên exec_mode
+        const char *type_name;
+        switch (task->exec_mode) {
+            case EXEC_COMMAND:
+                type_name = "Command";
+                break;
+            case EXEC_SCRIPT:
+                type_name = "Script";
+                break;
+            case EXEC_AI_DYNAMIC:
+                type_name = "AI Dynamic";
+                break;
+            default:
+                type_name = "Unknown";
+        }
+        printf("Type: %s\n", type_name);
         
         if (task->exec_mode == EXEC_COMMAND) {
             printf("Command: %s\n", task->command);
-        } else {
+        } else if (task->exec_mode == EXEC_SCRIPT) {
             printf("Script size: %ld bytes\n", strlen(task->script_content));
+        } else if (task->exec_mode == EXEC_AI_DYNAMIC) {
+            printf("AI Prompt: %s\n", task->ai_prompt);
+            printf("System Metrics: %s\n", task->system_metrics);
         }
         
         printf("Schedule: ");
@@ -889,7 +947,6 @@ void cli_disable_task(int argc, char *argv[]) {
     // Lưu lại các giá trị quan trọng trước khi thay đổi
     time_t last_run_time = task->last_run_time;
     int exit_code = task->exit_code;
-    time_t next_run_time = task->next_run_time;
     
     // Log thông tin chi tiết về last_run_time ban đầu
     if (last_run_time > 0) {
@@ -989,12 +1046,40 @@ void cli_view_task(int argc, char *argv[]) {
     printf("ID: %d\n", task->id);
     printf("Name: %s\n", task->name);
     printf("Enabled: %s\n", task->enabled ? "Yes" : "No");
-    printf("Type: %s\n", task->exec_mode == EXEC_COMMAND ? "Command" : "Script");
     
+    // Hiển thị loại tác vụ dựa trên exec_mode
+    const char *type_name;
+    switch (task->exec_mode) {
+        case EXEC_COMMAND:
+            type_name = "Command";
+            break;
+        case EXEC_SCRIPT:
+            type_name = "Script";
+            break;
+        case EXEC_AI_DYNAMIC:
+            type_name = "AI Dynamic";
+            break;
+        default:
+            type_name = "Unknown";
+    }
+    printf("Type: %s\n", type_name);
+    
+    // Hiển thị thông tin dựa trên loại tác vụ
     if (task->exec_mode == EXEC_COMMAND) {
         printf("Command: %s\n", task->command);
-    } else {
+    } else if (task->exec_mode == EXEC_SCRIPT) {
         printf("Script:\n%s\n", task->script_content);
+    } else if (task->exec_mode == EXEC_AI_DYNAMIC) {
+        printf("AI Prompt: %s\n", task->ai_prompt);
+        printf("System Metrics: %s\n", task->system_metrics);
+        
+        // Kiểm tra API key có được cấu hình hay không
+        const char *api_key = ai_get_api_key();
+        if (!api_key) {
+            printf("\nWARNING: No DeepSeek API key is configured!\n");
+            printf("You must set an API key before running this task:\n");
+            printf("  %s set-api-key your_api_key_here\n", argv[0]);
+        }
     }
     
     printf("Schedule: ");
@@ -1245,7 +1330,7 @@ void cli_convert_to_script(int argc, char *argv[]) {
     
     const char *script_content = argv[3];
     
-    if (scheduler_set_exec_mode(&scheduler, task_id, EXEC_SCRIPT, script_content)) {
+    if (scheduler_set_exec_mode(&scheduler, task_id, EXEC_SCRIPT, script_content, NULL, NULL)) {
         printf("Task %d converted to script mode\n", task_id);
     } else {
         printf("Failed to convert task %d to script mode\n", task_id);
@@ -1267,7 +1352,7 @@ void cli_convert_to_command(int argc, char *argv[]) {
     const char *command = argv[3];
     
     // First set mode to command
-    if (!scheduler_set_exec_mode(&scheduler, task_id, EXEC_COMMAND, NULL)) {
+    if (!scheduler_set_exec_mode(&scheduler, task_id, EXEC_COMMAND, NULL, NULL, NULL)) {
         printf("Failed to convert task %d to command mode\n", task_id);
         return;
     }
@@ -1290,11 +1375,41 @@ void cli_convert_to_command(int argc, char *argv[]) {
     free(task);
 }
 
+void cli_convert_to_ai_dynamic(int argc, char *argv[]) {
+    if (argc < 5) {
+        printf("Usage: %s to-ai <task_id> <ai_prompt> <system_metrics>\n", argv[0]);
+        printf("Example: %s to-ai 1 \"Clean temporary files\" \"cpu_load,disk:/tmp\"\n", argv[0]);
+        return;
+    }
+    
+    int task_id = atoi(argv[2]);
+    const char *ai_prompt = argv[3];
+    const char *system_metrics = argv[4];
+    
+    if (scheduler_set_exec_mode(&scheduler, task_id, EXEC_AI_DYNAMIC, NULL, ai_prompt, system_metrics)) {
+        printf("Task %d converted to AI-Dynamic mode\n", task_id);
+        printf("AI Prompt: %s\n", ai_prompt);
+        printf("System Metrics: %s\n", system_metrics);
+        
+        // Kiểm tra xem API key đã được cấu hình chưa
+        const char *api_key = ai_get_api_key();
+        if (!api_key) {
+            printf("\nWARNING: No DeepSeek API key is configured!\n");
+            printf("You must set an API key before running this task:\n");
+            printf("  %s set-api-key your_api_key_here\n", argv[0]);
+        } else {
+            printf("\nAPI key is configured and ready to use.\n");
+        }
+    } else {
+        printf("Failed to convert task %d to AI-Dynamic mode\n", task_id);
+    }
+}
+
 void cli_help(int argc, char *argv[]) {
     (void)argc; // Unused parameter
     
     printf("Task Scheduler Commands:\n");
-    printf("  %s add <name> [command] [options]  : Add a new task\n", argv[0]);
+    printf("  %s add <n> [command] [options]  : Add a new task\n", argv[0]);
     printf("    Options:\n");
     printf("      -t <minutes>     : Task interval in minutes\n");
     printf("      -s <cron>        : Schedule in cron format (e.g., \"0 9 * * 1-5\")\n");
@@ -1314,6 +1429,9 @@ void cli_help(int argc, char *argv[]) {
     printf("  %s set-dep-behavior <task_id> <behavior> : Set dependency behavior\n", argv[0]);
     printf("  %s to-script <task_id> <script> : Convert task to script mode\n", argv[0]);
     printf("  %s to-command <task_id> <command> : Convert task to command mode\n", argv[0]);
+    printf("  %s to-ai <task_id> <ai_prompt> <system_metrics> : Convert task to AI-Dynamic mode\n", argv[0]);
+    printf("  %s set-api-key <api_key> : Set DeepSeek API key in config file\n", argv[0]);
+    printf("  %s view-api-key     : View DeepSeek API key configuration\n", argv[0]);
     printf("  %s help              : Show this help message\n", argv[0]);
     
     printf("\nCron Format Guide:\n");
@@ -1439,7 +1557,7 @@ void cli_run_interactive(const char *data_dir) {
                     while (isspace((unsigned char)*p)) p++;
                 } else {
                     // Thêm ký tự vào token hiện tại
-                    if (token_len < sizeof(token) - 1) {
+                    if (token_len < (int)(sizeof(token) - 1)) {
                         token[token_len++] = *p;
                     }
                     p++;
@@ -1510,4 +1628,64 @@ char* cli_get_command() {
 void time_to_string(time_t time, char *buffer, size_t buffer_size, const char *format) {
     // ...
 }
-#endif 
+#endif
+
+// Thêm các hàm mới để quản lý API key
+void cli_set_api_key(int argc, char *argv[]) {
+    if (argc < 3) {
+        printf("Usage: %s set-api-key <api_key>\n", argv[0]);
+        printf("Example: %s set-api-key sk-abcdefgh12345678\n", argv[0]);
+        return;
+    }
+    
+    const char *api_key = argv[2];
+    
+    if (ai_update_api_key(api_key, NULL)) {
+        printf("API key updated successfully in config file.\n");
+    } else {
+        printf("Failed to update API key. Check error logs for details.\n");
+    }
+}
+
+void cli_view_api_key(int argc, char *argv[]) {
+    (void)argc; // Unused parameter
+    (void)argv; // Unused parameter
+    
+    // Đảm bảo cấu hình đã được tải
+    if (!ai_load_config(NULL)) {
+        printf("Failed to load configuration.\n");
+        return;
+    }
+    
+    const char *api_key = ai_get_api_key();
+    
+    if (api_key) {
+        // Hiển thị API key với một phần đầu và cuối, giữa bị che
+        int len = strlen(api_key);
+        if (len > 8) {
+            printf("Current API key: ");
+            // Hiển thị 4 ký tự đầu
+            for (int i = 0; i < 4 && i < len; i++) {
+                printf("%c", api_key[i]);
+            }
+            
+            // Che khoảng giữa bằng dấu *
+            printf("****");
+            
+            // Hiển thị 4 ký tự cuối
+            if (len > 8) {
+                for (int i = len - 4; i < len; i++) {
+                    printf("%c", api_key[i]);
+                }
+            }
+            printf("\n");
+        } else {
+            printf("Current API key: %s\n", api_key);
+        }
+        
+        printf("\nAPI key is configured and ready to use with AI-Dynamic tasks.\n");
+    } else {
+        printf("No API key is currently configured.\n");
+        printf("Use '%s set-api-key <api_key>' to set your DeepSeek API key.\n", argv[0]);
+    }
+}

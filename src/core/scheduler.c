@@ -1,6 +1,7 @@
 #include "../../include/scheduler.h"
 #include "../../include/utils.h"
 #include "../../include/db.h"
+#include "../../include/ai.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <pthread.h>
 
 #define INITIAL_CAPACITY 10
 #define DB_FILENAME "tasks.db"
@@ -427,6 +429,49 @@ bool scheduler_execute_task(Scheduler *scheduler, int task_id) {
         
         // Reacquire the lock
         pthread_mutex_lock(&scheduler->lock);
+    } else if (task->exec_mode == EXEC_AI_DYNAMIC) {
+        // Tải lại cấu hình mỗi lần để đảm bảo đọc API key mới nhất
+        ai_load_config(NULL);
+        
+        // Lấy Deepseek API key từ cấu hình hoặc biến môi trường
+        const char *api_key = ai_get_api_key();
+        if (!api_key) {
+            log_message(LOG_ERROR, "DeepSeek API key not found in config file or environment variable");
+            log_message(LOG_INFO, "Please set your API key using 'taskscheduler set-api-key YOUR_API_KEY' command");
+            exit_code = -1;
+        } else {
+            // Thu thập thông tin hệ thống
+            SystemMetrics metrics;
+            init_system_metrics(&metrics); // Khởi tạo metrics trước khi thu thập
+            
+            if (!collect_system_metrics(task->system_metrics, &metrics)) {
+                log_message(LOG_ERROR, "Failed to collect system metrics for task %d", task_id);
+                exit_code = -1;
+            } else {
+                // Sử dụng hàm AI mới để tạo lệnh từ AI
+                char *command = ai_generate_command(&metrics, task->ai_prompt);
+                
+                if (!command || strlen(command) == 0) {
+                    log_message(LOG_ERROR, "Failed to generate AI command for task %d", task_id);
+                    if (command) free(command);
+                    exit_code = -1;
+                } else {
+                    // Ghi log lệnh được tạo ra
+                    log_message(LOG_INFO, "AI generated command for task %d: %s", task_id, command);
+                    
+                    // Thực thi lệnh
+                    run_command_with_timeout(
+                        command,
+                        task->working_dir[0] ? task->working_dir : NULL,
+                        task->max_runtime,
+                        &exit_code
+                    );
+                    
+                    // Giải phóng lệnh
+                    free(command);
+                }
+            }
+        }
     } else {
         // Execute the command
         result = run_command_with_timeout(
@@ -585,6 +630,50 @@ static void* scheduler_thread_func(void *arg) {
                     unlink(temp_path);
                 } else {
                     log_message(LOG_ERROR, "Failed to prepare script for task %d", task_id);
+                    exit_code = -1;
+                }
+            } else if (task->exec_mode == EXEC_AI_DYNAMIC) {
+                // Tải lại cấu hình mỗi lần để đảm bảo đọc API key mới nhất
+                ai_load_config(NULL);
+                
+                // Lấy Deepseek API key từ cấu hình hoặc biến môi trường
+                const char *api_key = ai_get_api_key();
+                if (!api_key) {
+                    log_message(LOG_ERROR, "DeepSeek API key not found in config file or environment variable");
+                    log_message(LOG_INFO, "Please set your API key using 'taskscheduler set-api-key YOUR_API_KEY' command");
+                    exit_code = -1;
+                } else {
+                    // Thu thập thông tin hệ thống
+                    SystemMetrics metrics;
+                    init_system_metrics(&metrics); // Khởi tạo metrics trước khi thu thập
+                    
+                    if (!collect_system_metrics(task->system_metrics, &metrics)) {
+                        log_message(LOG_ERROR, "Failed to collect system metrics for task %d", task_id);
+                        exit_code = -1;
+                    } else {
+                        // Sử dụng hàm AI mới để tạo lệnh từ AI
+                        char *command = ai_generate_command(&metrics, task->ai_prompt);
+                        
+                        if (!command || strlen(command) == 0) {
+                            log_message(LOG_ERROR, "Failed to generate AI command for task %d", task_id);
+                            if (command) free(command);
+                            exit_code = -1;
+                        } else {
+                            // Ghi log lệnh được tạo ra
+                            log_message(LOG_INFO, "AI generated command for task %d: %s", task_id, command);
+                            
+                            // Thực thi lệnh
+                            run_command_with_timeout(
+                                command,
+                                task->working_dir[0] ? task->working_dir : NULL,
+                                task->max_runtime,
+                                &exit_code
+                            );
+                            
+                            // Giải phóng lệnh
+                            free(command);
+                        }
+                    }
                 }
             } else {
                 // Thực thi lệnh shell
@@ -599,29 +688,34 @@ static void* scheduler_thread_func(void *arg) {
             // Khóa mutex để cập nhật trạng thái tác vụ trong danh sách chính
             pthread_mutex_lock(&scheduler->lock);
             
-            // Tìm lại tác vụ trong danh sách vì nó có thể đã thay đổi
-            int index = find_task_index(scheduler, task_id);
-            if (index != -1) {
+            // Tìm lại tác vụ trong danh sách chính (vì con trỏ có thể đã thay đổi)
+            int task_index = find_task_index(scheduler, task_id);
+            if (task_index >= 0) {
+                Task *original_task = &scheduler->tasks[task_index];
+                
                 // Cập nhật trạng thái thực thi
-                task_mark_executed(&scheduler->tasks[index], exit_code);
+                task_mark_executed(original_task, exit_code);
                 
-                // Cập nhật trong database
-                db_update_task(&scheduler->tasks[index]);
+                // Lưu vào cơ sở dữ liệu
+                pthread_mutex_unlock(&scheduler->lock); // Mở khóa mutex trước khi thao tác với DB
+                db_update_task(original_task);
+                pthread_mutex_lock(&scheduler->lock); // Khóa lại sau khi hoàn thành
                 
-                log_message(LOG_INFO, "Task completed: ID=%d, Name=%s, Exit code=%d", 
-                           task_id, task->name, exit_code);
+                // Ghi nhật ký
+                time_to_string(original_task->last_run_time, log_buffer, sizeof(log_buffer), NULL);
+                log_message(LOG_INFO, "Task executed: ID=%d, Name=%s, Time=%s, Exit code=%d",
+                           original_task->id, original_task->name, log_buffer, original_task->exit_code);
             } else {
-                log_message(LOG_WARNING, "Task ID %d không còn tồn tại trong scheduler sau khi thực thi", task_id);
+                log_message(LOG_WARNING, "Task not found after execution: ID=%d", task_id);
             }
             
             pthread_mutex_unlock(&scheduler->lock);
         }
         
-        // Ngủ trong khoảng thời gian check_interval
+        // Ngủ một khoảng thời gian trước khi kiểm tra lại
         sleep(scheduler->check_interval);
     }
     
-    log_message(LOG_INFO, "Scheduler thread stopped.");
     return NULL;
 }
 
@@ -845,41 +939,50 @@ bool scheduler_remove_dependency(Scheduler *scheduler, int task_id, int dependen
 }
 
 // Set the task execution mode
-bool scheduler_set_exec_mode(Scheduler *scheduler, int task_id, TaskExecMode mode, const char *script_content) {
-    if (!scheduler || task_id < 0) {
+bool scheduler_set_exec_mode(Scheduler *scheduler, int task_id, TaskExecMode mode, 
+                            const char *script_content, const char *ai_prompt, const char *system_metrics) {
+    if (!scheduler) {
         return false;
     }
     
     pthread_mutex_lock(&scheduler->lock);
     
-    // Find the task
-    int task_index = find_task_index(scheduler, task_id);
-    
-    if (task_index < 0) {
+    int index = find_task_index(scheduler, task_id);
+    if (index < 0) {
         pthread_mutex_unlock(&scheduler->lock);
-        log_message(LOG_ERROR, "Cannot set execution mode: Task not found");
         return false;
     }
     
-    // Update the task
-    Task *task = &scheduler->tasks[task_index];
+    Task *task = &scheduler->tasks[index];
+    
+    // Set the new execution mode
     task->exec_mode = mode;
     
-    // If script mode, update script content
+    // Clear script content and AI-related fields
+    task->script_content[0] = '\0';
+    task->ai_prompt[0] = '\0';
+    task->system_metrics[0] = '\0';
+    
+    // Set the appropriate content based on mode
     if (mode == EXEC_SCRIPT && script_content) {
         safe_strcpy(task->script_content, script_content, sizeof(task->script_content));
+    } else if (mode == EXEC_AI_DYNAMIC) {
+        if (ai_prompt) {
+            safe_strcpy(task->ai_prompt, ai_prompt, sizeof(task->ai_prompt));
+        }
+        if (system_metrics) {
+            safe_strcpy(task->system_metrics, system_metrics, sizeof(task->system_metrics));
+        }
     }
     
     pthread_mutex_unlock(&scheduler->lock);
     
-    // Update in database
+    // Update the task in the database
     if (!db_update_task(task)) {
-        log_message(LOG_ERROR, "Failed to update task execution mode in database");
+        log_message(LOG_ERROR, "Failed to update task in database after changing execution mode");
         return false;
     }
     
-    log_message(LOG_INFO, "Set task %d execution mode to %s", 
-               task_id, mode == EXEC_COMMAND ? "Command" : "Script");
-    
+    log_message(LOG_INFO, "Changed execution mode of task %d to %d", task_id, mode);
     return true;
 } 
