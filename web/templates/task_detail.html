@@ -21,6 +21,9 @@
                     <i class="fas fa-play-circle me-1"></i><span class="action-text">Chạy ngay</span>
                 </button>
             </form>
+            <a href="{{ url_for('ai_dynamic_form', task_id=task.id) }}" class="btn btn-info ms-1 mb-1 mb-md-0" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Chuyển đổi tác vụ thành AI Dynamic">
+                <i class="fas fa-brain me-1"></i><span class="action-text">AI Dynamic</span>
+            </a>
             {% endif %}
             <form action="{{ url_for('delete_task', task_id=task.id) }}" method="POST" class="d-inline">
                 <button type="submit" class="btn btn-danger ms-1 mb-1 mb-md-0" onclick="return confirm('Bạn có chắc chắn muốn xóa tác vụ này?')" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Xóa tác vụ này">

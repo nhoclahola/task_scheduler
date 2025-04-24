@@ -1,0 +1,214 @@
+{% extends 'layout.html' %}
+
+{% block title %}Task Scheduler - Chuyển đổi thành AI Dynamic{% endblock %}
+
+{% block head %}
+<style>
+    textarea.form-control {
+        min-height: 120px;
+    }
+    .metrics-container {
+        max-height: 300px;
+        overflow-y: auto;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Navigation breadcrumb -->
+    <div class="col-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Trang chủ</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('ai_dashboard') }}">AI Dashboard</a></li>
+                <li class="breadcrumb-item active">Chuyển đổi thành AI Dynamic</li>
+            </ol>
+        </nav>
+    </div>
+
+    <div class="col-lg-12">
+        <div class="card shadow mb-4">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0"><i class="fas fa-brain me-2"></i>Chuyển đổi tác vụ thành AI Dynamic</h5>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle me-2"></i>
+                    Tác vụ AI Dynamic sẽ tự động tạo và thực thi lệnh dựa trên các thông số hệ thống trong thời gian thực.
+                    Mô hình AI sẽ phân tích các metrics bạn chọn và tạo lệnh thích hợp để đạt được mục tiêu đã xác định.
+                </div>
+                
+                <div class="row mb-4">
+                    <div class="col-md-4">
+                        <div class="card h-100">
+                            <div class="card-header bg-light">
+                                <h6 class="mb-0">Thông tin tác vụ</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <label class="form-label">ID:</label>
+                                    <span class="ms-2">{{ task.id }}</span>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Tên:</label>
+                                    <span class="ms-2">{{ task.name }}</span>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Lịch trình:</label>
+                                    <span class="ms-2">
+                                        {% if task.schedule_type == 0 %}
+                                            <span class="badge bg-secondary">Thủ công</span>
+                                        {% elif task.schedule_type == 1 %}
+                                            <span class="badge bg-info">Mỗi {{ task.interval // 60 }} phút</span>
+                                        {% elif task.schedule_type == 2 %}
+                                            <span class="badge bg-primary">Cron</span>
+                                        {% endif %}
+                                    </span>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Hiện tại đang thực thi:</label>
+                                    <span class="ms-2">
+                                        {% if task.exec_mode == 0 %}
+                                            <span class="badge bg-danger">Lệnh shell</span>
+                                        {% elif task.exec_mode == 1 %}
+                                            <span class="badge bg-primary">Script</span>
+                                        {% endif %}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-8">
+                        <div class="card h-100">
+                            <div class="card-header bg-light">
+                                <h6 class="mb-0">Cấu hình AI Dynamic</h6>
+                            </div>
+                            <div class="card-body">
+                                <form method="POST" action="{{ url_for('convert_to_dynamic') }}">
+                                    <input type="hidden" name="task_id" value="{{ task.id }}">
+                                    
+                                    <div class="mb-4">
+                                        <label for="goal" class="form-label">Mục tiêu <span class="text-danger">*</span></label>
+                                        <textarea class="form-control" id="goal" name="goal" required
+                                                  placeholder="Mô tả mục tiêu mà AI cần đạt được dựa trên metrics hệ thống..."></textarea>
+                                        <div class="form-text">
+                                            Mô tả rõ ràng mục tiêu mà AI cần đạt được khi nó phân tích các metrics hệ thống.
+                                            Ví dụ: "Dọn dẹp các file log cũ khi ổ đĩa đầy hơn 80%"
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <label class="form-label">Chọn metrics hệ thống <span class="text-danger">*</span></label>
+                                        <div class="metrics-container border rounded p-3">
+                                            {% for metric in available_metrics %}
+                                            <div class="form-check mb-2">
+                                                <input class="form-check-input" type="checkbox" id="metric_{{ loop.index }}" 
+                                                       name="metrics" value="{{ metric.id }}">
+                                                <label class="form-check-label" for="metric_{{ loop.index }}">
+                                                    <strong>{{ metric.name }}</strong>
+                                                    <div class="form-text">{{ metric.description }}</div>
+                                                </label>
+                                            </div>
+                                            {% endfor %}
+                                        </div>
+                                        <div class="form-text">
+                                            Chọn các metrics mà AI cần phân tích để tạo lệnh thích hợp.
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="mt-4">
+                                        <button type="submit" class="btn btn-success">
+                                            <i class="fas fa-sync-alt me-2"></i>Chuyển đổi thành AI Dynamic
+                                        </button>
+                                        <a href="{{ url_for('view_task', task_id=task.id) }}" class="btn btn-outline-secondary ms-2">
+                                            <i class="fas fa-arrow-left me-2"></i>Quay lại
+                                        </a>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header bg-light">
+                        <h6 class="mb-0"><i class="fas fa-lightbulb me-2"></i>Ví dụ và giải thích</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <h6>Dọn dẹp ổ đĩa tự động</h6>
+                                        <p class="small">
+                                            <strong>Mục tiêu:</strong> Tự động dọn dẹp các file tạm và log cũ khi ổ đĩa sử dụng trên 90%
+                                        </p>
+                                        <p class="small">
+                                            <strong>Metrics:</strong> disk:/, disk:/var
+                                        </p>
+                                        <button class="btn btn-sm btn-outline-primary use-example" data-goal="Tự động dọn dẹp các file tạm và log cũ khi ổ đĩa sử dụng trên 90%" data-metrics="disk:/,disk:/var">Sử dụng</button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-6 mb-3">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <h6>Tối ưu hóa hiệu suất</h6>
+                                        <p class="small">
+                                            <strong>Mục tiêu:</strong> Tắt các tiến trình không cần thiết khi tải CPU cao hoặc bộ nhớ gần hết
+                                        </p>
+                                        <p class="small">
+                                            <strong>Metrics:</strong> cpu_load, mem_free, processes
+                                        </p>
+                                        <button class="btn btn-sm btn-outline-primary use-example" data-goal="Tắt các tiến trình không cần thiết khi tải CPU cao hoặc bộ nhớ gần hết" data-metrics="cpu_load,mem_free,processes">Sử dụng</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="alert alert-secondary mt-3">
+                            <h6 class="alert-heading"><i class="fas fa-info-circle me-2"></i>Cách hoạt động của AI Dynamic</h6>
+                            <p class="small mb-0">
+                                Khi được thực thi, tác vụ AI Dynamic sẽ thu thập các metrics hệ thống bạn đã chọn, 
+                                sau đó gửi chúng cùng với mục tiêu đến API trí tuệ nhân tạo. 
+                                AI sẽ phân tích dữ liệu và tạo ra lệnh shell phù hợp để đạt được mục tiêu đã đề ra. 
+                                Lệnh này sẽ được thực thi tự động. Mỗi lần chạy, AI sẽ tạo lệnh mới dựa trên tình trạng hệ thống hiện tại.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Sử dụng ví dụ
+    document.querySelectorAll('.use-example').forEach(button => {
+        button.addEventListener('click', function() {
+            const goal = this.getAttribute('data-goal');
+            const metrics = this.getAttribute('data-metrics').split(',');
+            
+            // Đặt giá trị mục tiêu
+            document.getElementById('goal').value = goal;
+            
+            // Bỏ chọn tất cả các checkbox trước
+            document.querySelectorAll('input[name="metrics"]').forEach(checkbox => {
+                checkbox.checked = false;
+            });
+            
+            // Chọn các metrics tương ứng
+            metrics.forEach(metric => {
+                const checkbox = Array.from(document.querySelectorAll('input[name="metrics"]'))
+                    .find(cb => cb.value === metric);
+                if (checkbox) checkbox.checked = true;
+            });
+        });
+    });
+</script>
+{% endblock %} 

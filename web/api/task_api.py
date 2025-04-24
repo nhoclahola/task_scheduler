@@ -125,15 +125,22 @@ class TaskAPI:
             self.slave_fd = None
             self.process = None
     
-    def _read_output(self, timeout=2.0):
-        """Đọc đầu ra từ binary tương tác"""
+    def _read_output(self, timeout=10.0, command=None):
+        """Đọc đầu ra từ binary tương tác, với timeout tùy chỉnh"""
         if self.simulation_mode or not self.master_fd:
             return ""
         
         output = ""
         end_time = time.time() + timeout
         
-        while time.time() < end_time:
+        # Lệnh ai-create cần thời gian xử lý lâu hơn
+        if command and 'ai-create' in command:
+            # Tăng thời gian chờ cho lệnh AI
+            end_time = time.time() + 30.0
+        
+        waiting_for_prompt = True
+        
+        while time.time() < end_time and waiting_for_prompt:
             try:
                 # Kiểm tra xem có dữ liệu để đọc không
                 readable, _, _ = select.select([self.master_fd], [], [], 0.1)
@@ -143,15 +150,37 @@ class TaskAPI:
                         break
                     output += chunk
                     
+                    # Kiểm tra xem đã nhận được kết quả hoàn chỉnh chưa
+                    if command and 'ai-create' in command:
+                        # Điều kiện đặc biệt cho lệnh AI
+                        if "Suggested name:" in output or "Task created" in output or "Done" in output:
+                            waiting_for_prompt = False
+                            print(f"Detected AI response completion: {output[-100:]}")
+                            break
+                        
                     # Kiểm tra xem có dấu nhắc cuối cùng không
                     if output.strip().endswith(">"):
+                        waiting_for_prompt = False
                         break
                 else:
                     # Không có dữ liệu sẵn sàng, chờ một chút
-                    time.sleep(0.1)
+                    time.sleep(0.2)
             except Exception as e:
                 print(f"Error reading from process: {e}")
                 break
+        
+        # Thử đọc thêm một lần nữa để chắc chắn có tất cả đầu ra
+        try:
+            readable, _, _ = select.select([self.master_fd], [], [], 0.5)
+            if self.master_fd in readable:
+                chunk = os.read(self.master_fd, 8192).decode('utf-8', errors='replace')
+                if chunk:
+                    output += chunk
+        except:
+            pass
+        
+        if time.time() >= end_time:
+            print(f"Warning: Timeout waiting for output from command {command}")
         
         return output
     
@@ -166,8 +195,8 @@ class TaskAPI:
                 print(f"Sending to binary: '{command}'")
                 os.write(self.master_fd, f"{command}\n".encode('utf-8'))
                 
-                # Đợi phản hồi
-                output = self._read_output(timeout=5.0)
+                # Đợi phản hồi - truyền thêm lệnh để xác định thời gian chờ
+                output = self._read_output(timeout=10.0, command=command)
                 print(f"Raw output from binary: '{output}'")
                 
                 # Phân tích kết quả để xác định thành công hay thất bại
@@ -495,41 +524,9 @@ class TaskAPI:
             if command:
                 cmd_parts.append(f'"{command}"')
         else:  # Chế độ script
-            # Kiểm tra xem có script_file hay không
-            if 'script_file' in task_data and task_data['script_file']:
-                script_file = task_data['script_file'].replace('"', '\\"')
-                
-                # Kiểm tra xem file có tồn tại và có nội dung không
-                try:
-                    if os.path.exists(script_file):
-                        # Đọc nội dung file để kiểm tra
-                        with open(script_file, 'r') as f:
-                            script_content = f.read().strip()
-                        
-                        if not script_content:
-                            # File trống, thêm nội dung mẫu
-                            with open(script_file, 'w') as f:
-                                f.write('#!/bin/bash\n\necho "Hello from script"\n')
-                            print(f"Added sample content to empty script file: {script_file}")
-                    else:
-                        print(f"Script file not found: {script_file}")
-                        # Quay lại sử dụng lệnh trực tiếp
-                        cmd_parts.append(f'"echo Script file not found: {os.path.basename(script_file)}"')
-                        exec_mode = 0
-                except Exception as e:
-                    print(f"Error checking script file: {e}")
-                    # Quay lại sử dụng lệnh trực tiếp
-                    cmd_parts.append(f'"echo Error with script file: {os.path.basename(script_file)}"')
-                    exec_mode = 0
-                
-                # Nếu vẫn ở chế độ script, thêm tham số file
-                if exec_mode == 1:
-                    cmd_parts.append('-f')
-                    cmd_parts.append(f'"{script_file}"')
-            
-            # Hoặc dùng script_content
-            elif 'script_content' in task_data and task_data['script_content']:
-                script_content = task_data['script_content'].strip()
+            # Đối với tất cả các script, luôn lưu vào file và sử dụng -f
+            if 'script_content' in task_data and task_data['script_content']:
+                script_content = task_data.get('script_content').strip()
                 
                 if script_content:
                     # Tạo file script tạm thời từ nội dung
@@ -543,12 +540,22 @@ class TaskAPI:
                     fd, temp_path = tempfile.mkstemp(suffix='.sh', prefix='script_', dir=script_dir)
                     
                     try:
-                        # Ghi nội dung vào file
-                        with os.fdopen(fd, 'w') as f:
-                            f.write(script_content)
+                        # Chuẩn hóa nội dung script
+                        # Chuyển đổi các CRLF (Windows) thành LF (Unix) 
+                        normalized_content = script_content.replace('\r\n', '\n')
                         
-                        # Cấp quyền thực thi cho file
-                        os.chmod(temp_path, 0o755)
+                        # Xử lý shebang nếu chưa có
+                        if not normalized_content.strip().startswith('#!/'):
+                            normalized_content = '#!/bin/bash\n' + normalized_content
+                        
+                        # Ghi nội dung đã chuẩn hóa vào file
+                        with os.fdopen(fd, 'w') as f:
+                            f.write(normalized_content)
+                        
+                        # Cấp quyền thực thi cho file (0777 cho phép tất cả người dùng thực thi)
+                        os.chmod(temp_path, 0o777)
+                        
+                        print(f"Created script file with full permissions (0777): {temp_path}")
                         
                         # Thêm đường dẫn file vào lệnh
                         cmd_parts.append('-f')
@@ -560,21 +567,56 @@ class TaskAPI:
                         # Quay lại sử dụng lệnh trực tiếp
                         cmd_parts.append(f'"echo Error creating script: {str(e)}"')
                         exec_mode = 0
-                    
                 else:
                     # Nếu nội dung trống, quay lại sử dụng lệnh trực tiếp
-                    cmd_parts.append('"echo Hello World"')
+                    cmd_parts.append('"echo No script content provided"')
                     exec_mode = 0
+            # Hoặc kiểm tra xem có script_file hay không
+            elif 'script_file' in task_data and task_data['script_file']:
+                script_file = task_data['script_file'].replace('"', '\\"')
+                
+                # Kiểm tra xem file có tồn tại và có nội dung không
+                try:
+                    if os.path.exists(script_file):
+                        # Đọc nội dung file để kiểm tra
+                        with open(script_file, 'r') as f:
+                            script_content = f.read().strip()
+                        
+                        if script_content:
+                            cmd_parts.append('-f')
+                            cmd_parts.append(f'"{script_file}"')
+                            print(f"Using script file: {script_file}")
+                        else:
+                            # File trống, quay lại sử dụng lệnh trực tiếp
+                            cmd_parts.append('"echo Script file is empty"')
+                            exec_mode = 0
+                    else:
+                        print(f"Script file not found: {script_file}")
+                        # Quay lại sử dụng lệnh trực tiếp
+                        cmd_parts.append(f'"echo Script file not found: {os.path.basename(script_file)}"')
+                        exec_mode = 0
+                except Exception as e:
+                    print(f"Error checking script file: {e}")
+                    # Quay lại sử dụng lệnh trực tiếp
+                    cmd_parts.append(f'"echo Error with script file: {os.path.basename(script_file)}"')
+                    exec_mode = 0
+            else:
+                # Không có nội dung script, quay lại sử dụng lệnh trực tiếp
+                cmd_parts.append('"echo No script content provided"')
+                exec_mode = 0
+        
+        # Xử lý lịch trình dựa trên loại
+        schedule_type = task_data.get('schedule_type', 0)
         
         # Thêm các tùy chọn
         # Nếu có khoảng thời gian (interval)
-        if task_data.get('schedule_type') == 1 and task_data.get('interval'):
+        if schedule_type == 1 and task_data.get('interval'):
             # Chuyển đổi từ giây sang phút (backend chấp nhận phút)
             minutes = max(1, int(task_data.get('interval', 0) / 60))
             cmd_parts.append(f"-t {minutes}")
         
         # Nếu có biểu thức cron
-        elif task_data.get('schedule_type') == 2 and task_data.get('cron_expression'):
+        elif schedule_type == 2 and task_data.get('cron_expression'):
             cron = task_data.get('cron_expression', '').replace('"', '\\"')
             cmd_parts.append(f'-s "{cron}"')
         
@@ -587,30 +629,97 @@ class TaskAPI:
         if task_data.get('max_runtime'):
             cmd_parts.append(f"-m {task_data.get('max_runtime')}")
         
+        # Xóa cờ -y để cho phương pháp thay thế làm việc tốt hơn
+        # cmd_parts.append("-y")
+        
         # Kết hợp các phần tạo thành lệnh hoàn chỉnh
         command = ' '.join(cmd_parts)
         
         # Thực thi lệnh
         print(f"Sending command: {command}")
-        exit_code, output = self._run_command(command)
         
-        if exit_code != 0:
-            print(f"Error adding task: {output}")
-            return -1
+        # Phương pháp 1: Sử dụng _send_command và xử lý kết quả
+        try:
+            # Sử dụng interactive process để có thể trả lời prompt
+            self._start_interactive_process()
+            
+            # Gửi lệnh add
+            os.write(self.master_fd, f"{command}\n".encode())
+            
+            # Đọc output với timeout
+            output = self._read_output(timeout=6.0)
+            print(f"Initial output from add command: '{output}'")
+            
+            # Kiểm tra xem có confirmation prompt không
+            if "Do you want to create this task? (y/n):" in output:
+                # Tự động trả lời "y"
+                os.write(self.master_fd, b"y\n")
+                time.sleep(0.5)
+                
+                # Đọc kết quả sau khi xác nhận
+                output = self._read_output(timeout=3.0)
+                print(f"Output after confirmation: '{output}'")
+            
+            # Tìm task ID từ kết quả
+            id_match = re.search(r"Task added with ID: (\d+)", output)
+            if id_match:
+                task_id = int(id_match.group(1))
+                print(f"Task added successfully with ID: {task_id}")
+                
+                # Cập nhật trạng thái của tác vụ nếu cần
+                if 'enabled' in task_data and not task_data['enabled']:
+                    self._run_command(f"disable {task_id}")
+                
+                return task_id
+            
+            # Nếu không tìm thấy ID nhưng không có lỗi rõ ràng
+            if "Task creation cancelled" not in output and "Error" not in output:
+                # Thử phương pháp 2: Lấy danh sách tác vụ để tìm ID mới nhất
+                print("Using fallback method to find newly created task")
+                tasks = self.get_all_tasks()
+                if tasks:
+                    max_id = max(task.get('id', 0) for task in tasks)
+                    print(f"Latest task ID found: {max_id}")
+                    return max_id
+            
+            # Phương pháp 3: Thử tạo lại task bằng lệnh add trực tiếp
+            print("Task creation failed. Trying direct add command...")
+            
+            # Tạo lệnh add mới không có tùy chọn -y
+            direct_command = ' '.join(cmd_parts)
+            
+            # Khởi động lại process để đảm bảo trạng thái sạch
+            self._start_interactive_process()
+            
+            # Gửi lệnh và trả lời prompt
+            os.write(self.master_fd, f"{direct_command}\n".encode())
+            time.sleep(1.0)
+            os.write(self.master_fd, b"y\n")
+            time.sleep(1.0)
+            
+            # Đọc kết quả
+            output = self._read_output(timeout=3.0)
+            print(f"Direct command output: '{output}'")
+            
+            # Kiểm tra lại ID
+            id_match = re.search(r"Task added with ID: (\d+)", output)
+            if id_match:
+                task_id = int(id_match.group(1))
+                print(f"Task added successfully with ID: {task_id} (direct method)")
+                return task_id
+            
+            # Kiểm tra một lần nữa danh sách tác vụ
+            tasks = self.get_all_tasks()
+            if tasks:
+                max_id = max(task.get('id', 0) for task in tasks)
+                print(f"Latest task ID found after direct command: {max_id}")
+                return max_id
+            
+        except Exception as e:
+            print(f"Error during task creation: {e}")
         
-        # Phân tích output để lấy ID tác vụ
-        id_match = re.search(r"Task added with ID: (\d+)", output)
-        if id_match:
-            task_id = int(id_match.group(1))
-            
-            # Cập nhật trạng thái của tác vụ nếu cần
-            if 'enabled' in task_data and not task_data['enabled']:
-                self._run_command(f"disable {task_id}")
-            
-            return task_id
-        else:
-            print(f"Could not determine task ID from output: {output}")
-            return -1
+        print(f"All methods failed to create task")
+        return -1
     
     def update_task(self, task_data):
         """Cập nhật một tác vụ"""
@@ -736,12 +845,22 @@ class TaskAPI:
                     fd, temp_path = tempfile.mkstemp(suffix='.sh', prefix='script_', dir=script_dir)
                     
                     try:
-                        # Ghi nội dung vào file
-                        with os.fdopen(fd, 'w') as f:
-                            f.write(script_content)
+                        # Chuẩn hóa nội dung script
+                        # Chuyển đổi các CRLF (Windows) thành LF (Unix) 
+                        normalized_content = script_content.replace('\r\n', '\n')
                         
-                        # Cấp quyền thực thi cho file
-                        os.chmod(temp_path, 0o755)
+                        # Xử lý shebang nếu chưa có
+                        if not normalized_content.strip().startswith('#!/'):
+                            normalized_content = '#!/bin/bash\n' + normalized_content
+                        
+                        # Ghi nội dung đã chuẩn hóa vào file
+                        with os.fdopen(fd, 'w') as f:
+                            f.write(normalized_content)
+                        
+                        # Cấp quyền thực thi cho file (0777 cho phép tất cả người dùng thực thi)
+                        os.chmod(temp_path, 0o777)
+                        
+                        print(f"Created script file with full permissions (0777): {temp_path}")
                         
                         # Thêm đường dẫn file vào lệnh
                         cmd_parts.append('-f')
@@ -1028,6 +1147,491 @@ class TaskAPI:
             print(f"Failed to update dependency behavior: {output}")
             return False
     
+    def get_api_key(self):
+        """Lấy API key đã cấu hình cho AI"""
+        if self.simulation_mode:
+            return None
+        
+        # Thay vì sử dụng lệnh get-api-key không tồn tại, đọc trực tiếp từ file cấu hình
+        try:
+            config_path = os.path.join(self.data_dir, "config.json")
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                    if 'api_key' in config:
+                        return config['api_key']
+        except Exception as e:
+            print(f"Error reading API key from config: {e}")
+        
+        # Nếu không thể đọc từ file, check output sau khi thiết lập
+        # Lệnh này chỉ để kiểm tra xem API key đã được thiết lập chưa
+        code, output = self._run_command("help")
+        if code == 0:
+            # API key đã được cài đặt sẽ được xem là đã thiết lập
+            return "API_KEY_SET"
+        
+        return None
+
+    def is_api_key_valid(self):
+        """Kiểm tra xem API key đã được thiết lập và hợp lệ chưa"""
+        if self.simulation_mode:
+            return True
+        
+        # Kiểm tra xem có tồn tại config.json không
+        config_path = os.path.join(self.data_dir, "config.json")
+        if not os.path.exists(config_path):
+            return False
+        
+        try:
+            # Đọc config và kiểm tra api_key
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+                # API key phải tồn tại và không phải chuỗi rỗng
+                if 'api_key' in config and config['api_key'] and len(config['api_key']) > 10:
+                    return True
+                return False
+        except Exception as e:
+            print(f"Error checking API key validity: {e}")
+            return False
+
+    def set_api_key(self, api_key):
+        """Thiết lập API key cho chức năng AI"""
+        if self.simulation_mode:
+            return True
+        
+        # Gửi lệnh set-api-key với API key
+        code, output = self._send_command(f"set-api-key {api_key}")
+        
+        # Xác định thành công dựa trên output
+        success = (code == 0) and (
+            "API key updated successfully" in output or 
+            "updated successfully" in output or
+            "saved" in output.lower()
+        )
+        
+        # Nếu lệnh thành công, thử đọc/ghi trực tiếp vào file config để đảm bảo 
+        if success:
+            try:
+                config_path = os.path.join(self.data_dir, "config.json")
+                
+                # Tạo config mới nếu không tồn tại
+                if not os.path.exists(config_path):
+                    with open(config_path, 'w') as f:
+                        json.dump({"api_key": api_key}, f, indent=2)
+                else:
+                    # Đọc config hiện tại và cập nhật
+                    try:
+                        with open(config_path, 'r') as f:
+                            config = json.load(f)
+                    except:
+                        config = {}
+                    
+                    config['api_key'] = api_key
+                    
+                    with open(config_path, 'w') as f:
+                        json.dump(config, f, indent=2)
+                    
+                print(f"API key saved successfully to {config_path}")
+            except Exception as e:
+                print(f"Warning: Failed to save API key directly to config: {e}")
+                # Không coi đây là lỗi hoàn toàn nếu backend đã thành công
+        
+        return success
+
+    def ai_generate_task(self, description):
+        """Sử dụng AI để tạo một tác vụ dựa trên mô tả bằng ngôn ngữ tự nhiên
+        
+        Args:
+            description (str): Mô tả tác vụ bằng ngôn ngữ tự nhiên
+            
+        Returns:
+            dict: Kết quả tạo tác vụ với các thông tin cần thiết
+        """
+        if 'SIMULATION' in os.environ:
+            # Trong chế độ giả lập, trả về dữ liệu mẫu
+            return {
+                'success': True,
+                'content': 'df -h | awk \'NR>1 {print $5,$1}\' | while read size fs; do pct=$(echo $size | cut -d\'%\' -f1); if [ $pct -ge 90 ]; then echo "WARNING: $fs is $size full!"; fi; done',
+                'is_script': False,
+                'is_cron': False,
+                'cron': '',
+                'interval_minutes': 60,
+                'schedule_description': 'Chạy mỗi giờ',
+                'suggested_name': 'Kiểm tra ổ đĩa'
+            }
+        
+        command = f'ai-create "{description}"'
+        
+        print(f"Sending AI create command with description: '{description}'")
+        print(f"Sending to binary: '{command}'")
+        
+        # Thiết lập biến môi trường để thông báo cho backend biết đây là lệnh gọi từ API
+        os.environ["FROM_TASKSCHEDULER_API"] = "1"
+        
+        output = ""
+        try:
+            # Sử dụng run_command thay vì _interactive_process để tránh lỗi
+            # Có timeout là 60 giây để đảm bảo AI có đủ thời gian suy nghĩ
+            output = self._read_output(timeout=60.0, command=command)
+            
+            if not output or "Generating task from description..." not in output:
+                # Thử lại với _send_command
+                code, output = self._run_command("ai-create", f'"{description}"')
+                if code != 0 or not output:
+                    return {
+                        'success': False,
+                        'error': 'Không nhận được phản hồi từ AI'
+                    }
+        except Exception as e:
+            print(f"Warning: Timeout waiting for output from command {command}")
+            # Thử lại một lần nữa với _run_command
+            try:
+                code, output = self._run_command("ai-create", f'"{description}"')
+                if code != 0 or not output:
+                    print(f"Error generating task: {str(e)}")
+                    return {
+                        'success': False,
+                        'error': f'Lỗi khi tạo tác vụ: {str(e)}'
+                    }
+            except Exception as e2:
+                print(f"Error in second attempt: {str(e2)}")
+                return {
+                    'success': False,
+                    'error': f'Lỗi khi tạo tác vụ: {str(e2)}'
+                }
+        finally:
+            # Xóa biến môi trường sau khi hoàn thành để không ảnh hưởng đến các lệnh khác
+            if "FROM_TASKSCHEDULER_API" in os.environ:
+                del os.environ["FROM_TASKSCHEDULER_API"]
+        
+        # Kiểm tra nếu output là một tuple (có thể xảy ra với _run_command)
+        if isinstance(output, tuple) and len(output) >= 2:
+            _, output = output
+        
+        print(f"Raw output from binary: '{output}'")
+        
+        # Kiểm tra lỗi từ AI
+        if "[ERROR]" in output and "Failed to parse complete task JSON" in output:
+            return {
+                'success': False,
+                'error': 'API của OpenAI không thể tạo task hợp lệ. Vui lòng thử lại với mô tả khác.'
+            }
+        
+        if "Could not generate task from description." in output:
+            return {
+                'success': False,
+                'error': 'Không thể tạo tác vụ từ mô tả này. Vui lòng thử mô tả rõ ràng hơn.'
+            }
+            
+        # Tạo task mẫu nếu AI gặp lỗi nhưng vẫn có thể hiểu yêu cầu
+        if ("error" in output.lower() or "failed" in output.lower()) and ("backup" in description.lower() or "sao lưu" in description.lower()):
+            # Tạo tác vụ sao lưu mẫu
+            if "/var/www" in description and "/backup" in description:
+                script_content = """#!/bin/bash
+
+BACKUP_SOURCE="/var/www"
+BACKUP_DEST="/backup"
+BACKUP_DATE=$(date +%Y-%m-%d)
+
+if [ ! -d "$BACKUP_DEST" ]; then
+    mkdir -p "$BACKUP_DEST"
+fi
+
+tar -czf "$BACKUP_DEST/www_backup_$BACKUP_DATE.tar.gz" "$BACKUP_SOURCE" 2>/dev/null
+
+if [ $? -eq 0 ]; then
+    echo "Backup completed successfully"
+    exit 0
+else
+    echo "Backup failed"
+    exit 1
+fi
+"""
+                # Phát hiện thời gian từ mô tả
+                cron_expression = "0 2 * * *"  # mặc định 2 giờ sáng
+                schedule_description = "Chạy mỗi ngày lúc 2 giờ"
+                
+                if "2 giờ sáng" in description or "2 giờ" in description:
+                    cron_expression = "0 2 * * *"
+                    schedule_description = "Chạy mỗi ngày lúc 2 giờ"
+                
+                return {
+                    'success': True,
+                    'content': script_content,
+                    'is_script': True,
+                    'is_cron': True,
+                    'cron': cron_expression,
+                    'interval_minutes': 1440,  # 24 giờ
+                    'schedule_description': schedule_description,
+                    'suggested_name': 'daily_www_backup',
+                    'raw_output': output
+                }
+        
+        # Kiểm tra xem output có chứa script hay command hay không
+        is_script = False
+        content = ""
+        suggested_name = ""
+        is_cron = False
+        cron_expression = ""
+        interval_minutes = 60  # Mặc định là 60 phút nếu không xác định được
+        schedule_description = "Chạy hàng ngày"  # Mặc định nếu không xác định được
+        
+        # Xác định loại tác vụ (script hay command)
+        if "AI has generated a script based on your description:" in output:
+            is_script = True
+        elif "AI has generated a command based on your description:" in output:
+            is_script = False
+        else:
+            # Kiểm tra xem có chứa "Script" trong thông tin schedule không
+            if "Script" in output and "Schedule:" in output:
+                is_script = True
+        
+        # Loại bỏ phần "Do you want to create this task? (y/n):" nếu có
+        if "Do you want to create this task? (y/n):" in output:
+            output = output.split("Do you want to create this task? (y/n):")[0].strip()
+        
+        # Trích xuất nội dung script/command
+        content_lines = []
+        in_content_section = False
+        
+        # Mẫu mới: "AI generated task: Script, Schedule: 0 2 * * *, Name: daily_www_backup"
+        if "AI generated task:" in output:
+            info_line = [line for line in output.split('\n') if "AI generated task:" in line]
+            if info_line:
+                info = info_line[0]
+                if "Script" in info:
+                    is_script = True
+                
+                # Trích xuất cron expression
+                import re
+                cron_match = re.search(r'Schedule: ([0-9*\s]+)', info)
+                if cron_match:
+                    cron_expression = cron_match.group(1).strip()
+                    is_cron = True
+                    # Phân tích biểu thức cron để xác định loại lịch trình
+                    cron_parts = cron_expression.split()
+                    if len(cron_parts) >= 2:
+                        try:
+                            hour = int(cron_parts[1])
+                            schedule_description = f"Chạy mỗi ngày lúc {hour} giờ"
+                        except ValueError:
+                            schedule_description = f"Theo biểu thức Cron: {cron_expression}"
+                
+                # Trích xuất tên đề xuất
+                name_match = re.search(r'Name: ([\w_-]+)', info)
+                if name_match:
+                    suggested_name = name_match.group(1).strip()
+        
+        # Phân tích nội dung output
+        for line in output.split('\n'):
+            # Tìm phần bắt đầu của nội dung
+            if line.strip() == "-----------------------------------------------------------":
+                if not in_content_section:
+                    in_content_section = True
+                    continue
+                else:
+                    in_content_section = False
+                    break
+            
+            # Thu thập các dòng nội dung
+            if in_content_section:
+                content_lines.append(line)
+        
+        # Nếu không tìm thấy khu vực được đánh dấu rõ ràng, tìm kiếm theo cách khác
+        if not content_lines:
+            # Tìm kiếm nội dung sau "AI has generated a script/command based on your description:"
+            if is_script:
+                marker = "AI has generated a script based on your description:"
+            else:
+                marker = "AI has generated a command based on your description:"
+            
+            if marker in output:
+                content_section = output.split(marker)[1].strip()
+                
+                # Lấy phần nội dung trước khi gặp "Schedule:" hoặc "Cron Expression:" hoặc dòng trống kép
+                if "Schedule:" in content_section:
+                    content_section = content_section.split("Schedule:")[0].strip()
+                elif "Cron Expression:" in content_section:
+                    content_section = content_section.split("Cron Expression:")[0].strip()
+                elif "\n\n" in content_section:
+                    content_section = content_section.split("\n\n")[0].strip()
+                
+                # Loại bỏ delimiter nếu có
+                content_section = content_section.replace("-----------------------------------------------------------", "").strip()
+                
+                content_lines = content_section.split("\n")
+        
+        # Nếu vẫn không tìm thấy nội dung, tìm kiếm từ đầu ra chưa được xử lý
+        if not content_lines and isinstance(output, str):
+            # Tìm dòng bắt đầu với #!/bin/bash hoặc các ký tự phổ biến khác cho script
+            lines = output.split('\n')
+            start_index = -1
+            end_index = -1
+            
+            for i, line in enumerate(lines):
+                if line.strip().startswith("#!/bin/bash") or line.strip().startswith("#!/usr/bin/env"):
+                    start_index = i
+                    break
+            
+            if start_index >= 0:
+                # Tìm dòng kết thúc (dòng trống sau script)
+                for i in range(start_index + 1, len(lines)):
+                    if not lines[i].strip() and i < len(lines) - 1 and not lines[i+1].strip():
+                        end_index = i
+                        break
+                
+                # Nếu không tìm thấy dòng kết thúc rõ ràng, tìm các marker khác
+                if end_index < 0:
+                    for i in range(start_index + 1, len(lines)):
+                        if lines[i].strip() == "-----------------------------------------------------------" or \
+                           "Schedule:" in lines[i] or "Cron Expression:" in lines[i]:
+                            end_index = i - 1
+                            break
+                
+                # Nếu vẫn không tìm thấy, lấy đến cuối
+                if end_index < 0:
+                    end_index = len(lines) - 1
+                
+                content_lines = lines[start_index:end_index+1]
+        
+        # Kết hợp các dòng nội dung
+        if content_lines:
+            content = '\n'.join(content_lines).strip()
+        
+        # Trích xuất thông tin lịch trình
+        schedule_info = ""
+        for line in output.split('\n'):
+            if line.strip().startswith("Schedule:"):
+                schedule_info = line.strip()[len("Schedule:"):].strip()
+                break
+        
+        if schedule_info:
+            schedule_description = schedule_info
+        
+        # Trích xuất biểu thức cron
+        if not cron_expression:  # Chỉ tìm nếu chưa được tìm thấy ở trên
+            for line in output.split('\n'):
+                if line.strip().startswith("Cron Expression:"):
+                    cron_expression = line.strip()[len("Cron Expression:"):].strip()
+                    is_cron = True
+                    break
+        
+        # Phân tích biểu thức cron để xác định loại lịch trình
+        if cron_expression:
+            import re
+            if re.match(r'^\d+\s+\d+\s+\*\s+\*\s+\*$', cron_expression):
+                cron_parts = cron_expression.split()
+                try:
+                    hour = int(cron_parts[1])
+                    schedule_description = f"Chạy mỗi ngày lúc {hour} giờ"
+                except (ValueError, IndexError):
+                    schedule_description = f"Theo biểu thức Cron: {cron_expression}"
+        
+        # Trích xuất tên đề xuất
+        if not suggested_name:  # Chỉ tìm nếu chưa được tìm thấy ở trên
+            for line in output.split('\n'):
+                if line.strip().startswith("Suggested Name:"):
+                    suggested_name = line.strip()[len("Suggested Name:"):].strip()
+                    break
+                elif "Name:" in line and not "AI has generated" in line:
+                    name_part = line.split("Name:")[1].strip()
+                    # Lấy phần đầu tiên nếu có nhiều phần
+                    suggested_name = name_part.split()[0].strip()
+                    break
+        
+        # Nếu không tìm thấy tên đề xuất, đặt tên mặc định dựa trên mô tả
+        if not suggested_name:
+            words = description.split()
+            if len(words) > 3:
+                suggested_name = "_".join(words[:3]).lower()
+            else:
+                suggested_name = "_".join(words).lower()
+            
+            # Loại bỏ các ký tự không hợp lệ
+            import re
+            suggested_name = re.sub(r'[^a-zA-Z0-9_]', '', suggested_name)
+            
+            # Đảm bảo tên không quá dài
+            if len(suggested_name) > 30:
+                suggested_name = suggested_name[:30]
+            
+            # Thêm tiền tố để dễ nhận biết
+            suggested_name = "task_" + suggested_name
+        
+        # Kiểm tra xem có tìm thấy nội dung hay không
+        if not content:
+            # Nếu không tìm thấy nội dung, trả về lỗi
+            return {
+                'success': False,
+                'error': 'Không thể trích xuất nội dung từ phản hồi của AI'
+            }
+        
+        return {
+            'success': True,
+            'content': content,
+            'is_script': is_script,
+            'is_cron': is_cron,
+            'cron': cron_expression,
+            'interval_minutes': interval_minutes,
+            'schedule_description': schedule_description,
+            'suggested_name': suggested_name,
+            'raw_output': output  # Lưu toàn bộ đầu ra gốc để debug
+        }
+
+    def ai_generate_command(self, goal, system_metrics):
+        """Tạo lệnh dựa trên thông số hệ thống và mục tiêu"""
+        if self.simulation_mode:
+            # Trả về dữ liệu mẫu trong chế độ giả lập
+            return {
+                'success': True,
+                'command': 'echo "Dynamic command based on metrics"'
+            }
+        
+        # Gọi lệnh ai-generate với mục tiêu và metrics
+        code, output = self._run_command("ai-generate", f'"{goal}"', f'"{system_metrics}"')
+        
+        if code == 0:
+            # Trích xuất lệnh từ đầu ra
+            command_match = re.search(r'Command:\s*`(.+?)`', output)
+            if command_match:
+                return {
+                    'success': True,
+                    'command': command_match.group(1).strip()
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': 'Không thể trích xuất lệnh từ kết quả'
+                }
+        else:
+            return {
+                'success': False,
+                'error': output
+            }
+
+    def convert_task_to_ai_dynamic(self, task_id, goal, system_metrics):
+        """Chuyển đổi task thành chế độ AI Dynamic"""
+        if self.simulation_mode:
+            return True
+        
+        # Gọi lệnh to-ai để chuyển đổi task
+        code, output = self._run_command("to-ai", task_id, f'"{goal}"', f'"{system_metrics}"')
+        return code == 0
+
+    def get_available_system_metrics(self):
+        """Lấy danh sách các system metrics khả dụng"""
+        # Danh sách cố định của các metrics có sẵn
+        return [
+            {'id': 'cpu_load', 'name': 'Tải CPU', 'description': 'Phần trăm tải CPU'},
+            {'id': 'mem_free', 'name': 'Bộ nhớ trống', 'description': 'Lượng bộ nhớ RAM còn trống'},
+            {'id': 'mem_used', 'name': 'Bộ nhớ đã dùng', 'description': 'Lượng bộ nhớ RAM đã sử dụng'},
+            {'id': 'disk:/', 'name': 'Ổ đĩa / (root)', 'description': 'Mức sử dụng ổ đĩa gốc'},
+            {'id': 'disk:/home', 'name': 'Ổ đĩa /home', 'description': 'Mức sử dụng ổ đĩa /home'},
+            {'id': 'disk:/var', 'name': 'Ổ đĩa /var', 'description': 'Mức sử dụng ổ đĩa /var'},
+            {'id': 'load_avg', 'name': 'Tải trung bình', 'description': 'Chỉ số tải trung bình của hệ thống'},
+            {'id': 'processes', 'name': 'Tiến trình', 'description': 'Thông tin về các tiến trình đang chạy'}
+        ]
+
     def __del__(self):
         """Dọn dẹp khi đối tượng bị hủy"""
         if not self.simulation_mode and self.process and self.process.poll() is None:

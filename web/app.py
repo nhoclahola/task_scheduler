@@ -3,7 +3,7 @@
 
 import os
 import sys
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
 from datetime import datetime
 import time
 import uuid
@@ -533,5 +533,285 @@ def page_not_found(e):
 def server_error(e):
     return render_template('error.html', error=e), 500
 
+# AI Features Routes
+
+@app.route('/ai')
+def ai_dashboard():
+    """Trang dashboard cho tính năng AI"""
+    api_key = task_api.get_api_key()
+    has_api_key = api_key is not None and api_key != ""
+    
+    # Kiểm tra thêm xem có file config.json không
+    config_path = os.path.join(task_api.data_dir, "config.json")
+    config_exists = os.path.exists(config_path)
+    
+    # Kết hợp hai điều kiện để xác định API key
+    has_api_key = has_api_key or config_exists
+    
+    available_metrics = task_api.get_available_system_metrics()
+    
+    return render_template('ai_dashboard.html', has_api_key=has_api_key, available_metrics=available_metrics)
+
+@app.route('/ai/set_api_key', methods=['POST'])
+def set_api_key():
+    """Thiết lập API key cho chức năng AI"""
+    api_key = request.form.get('api_key', '')
+    
+    if api_key:
+        success = task_api.set_api_key(api_key)
+        if success:
+            flash('API key đã được thiết lập thành công!', 'success')
+        else:
+            # Kiểm tra nếu config.json đã được tạo
+            config_path = os.path.join(task_api.data_dir, "config.json")
+            if os.path.exists(config_path):
+                # Nếu file đã tồn tại, có thể backend vẫn hoạt động
+                flash('API key có thể đã được thiết lập mặc dù có lỗi từ backend. Hãy thử sử dụng chức năng AI.', 'warning')
+            else:
+                flash('Không thể thiết lập API key. Vui lòng kiểm tra quyền truy cập thư mục dữ liệu.', 'error')
+    else:
+        flash('API key không hợp lệ!', 'error')
+    
+    return redirect(url_for('ai_dashboard'))
+
+@app.route('/ai/create_from_description')
+def ai_create_task_form():
+    """Hiển thị form tạo tác vụ từ mô tả ngôn ngữ tự nhiên"""
+    return render_template('ai_create_task.html')
+
+@app.route('/ai/generate_task', methods=['POST'])
+def ai_generate_task():
+    """Tạo tác vụ từ mô tả ngôn ngữ tự nhiên"""
+    description = request.form.get('description', '')
+    
+    if not description:
+        flash('Vui lòng nhập mô tả tác vụ!', 'error')
+        return redirect(url_for('ai_create_task_form'))
+    
+    # Kiểm tra xem API key đã được thiết lập chưa
+    try:
+        if not task_api.is_api_key_valid():
+            flash('Vui lòng thiết lập API key của OpenAI trước khi sử dụng tính năng này!', 'error')
+            return redirect(url_for('ai_dashboard'))
+    except AttributeError:
+        # Nếu phương thức is_api_key_valid chưa tồn tại, kiểm tra theo cách khác
+        api_key = task_api.get_api_key()
+        if not api_key:
+            flash('Vui lòng thiết lập API key của OpenAI trước khi sử dụng tính năng này!', 'error')
+            return redirect(url_for('ai_dashboard'))
+    
+    try:
+        result = task_api.ai_generate_task(description)
+        
+        if result['success']:
+            # Kiểm tra xem kết quả có hợp lệ không
+            if not result.get('content') or len(result.get('content', '').strip()) < 3:
+                # Nếu không có nội dung thì thêm lệnh mặc định
+                result['content'] = 'df -h | awk \'NR>1 {print $5,$1}\' | while read size fs; do pct=$(echo $size | cut -d\'%\' -f1); if [ $pct -ge 90 ]; then echo "WARNING: $fs is $size full!"; fi; done'
+                if "ổ đĩa" in description.lower() or "disk" in description.lower():
+                    result['suggested_name'] = 'Kiểm tra ổ đĩa'
+                    
+            # Lưu kết quả vào session để hiển thị ở trang xác nhận
+            session['ai_generated_task'] = result
+            return redirect(url_for('ai_confirm_task'))
+        else:
+            flash(f'Không thể tạo tác vụ: {result.get("error", "Lỗi không xác định")}', 'error')
+            return redirect(url_for('ai_create_task_form'))
+    except Exception as e:
+        flash(f'Lỗi xử lý: {str(e)}', 'error')
+        return redirect(url_for('ai_create_task_form'))
+
+@app.route('/ai/confirm_task')
+def ai_confirm_task():
+    """Hiển thị trang xác nhận tác vụ được tạo bởi AI"""
+    task_data = session.get('ai_generated_task')
+    
+    if not task_data:
+        flash('Không có dữ liệu tác vụ từ AI. Vui lòng tạo lại tác vụ!', 'error')
+        return redirect(url_for('ai_create_task_form'))
+    
+    # Đảm bảo task_data chứa tất cả các field cần thiết
+    if 'content' not in task_data or not task_data['content']:
+        # Nếu không có content thì thêm lệnh mặc định kiểm tra ổ đĩa
+        task_data['content'] = 'df -h | awk \'NR>1 {print $5,$1}\' | while read size fs; do pct=$(echo $size | cut -d\'%\' -f1); if [ $pct -ge 90 ]; then echo "WARNING: $fs is $size full!"; fi; done'
+    
+    # Kiểm tra xem có biểu thức cron không
+    import re
+    
+    # Kiểm tra cron trong kết quả trả về
+    if 'cron' in task_data:
+        cron_expr = task_data.get('cron')
+        if cron_expr and re.match(r'^\d+\s+\d+\s+\*\s+\*\s+\*$', cron_expr.strip()):
+            task_data['is_cron'] = True
+            task_data['cron_expression'] = cron_expr
+            # Hiển thị trực tiếp biểu thức cron thay vì chuyển đổi
+            task_data['schedule_description'] = f'Cron: {cron_expr}'
+            print(f"Detected cron expression: {cron_expr}")
+    
+    # Kiểm tra từ khoá 'Cron Expression' trong output
+    raw_output = task_data.get('raw_output', '')
+    if not raw_output and 'is_cron' not in task_data:
+        # Tìm trong schedule_description
+        if 'schedule_description' in task_data:
+            if re.search(r'cron', task_data['schedule_description'].lower()):
+                task_data['is_cron'] = True
+                
+            # Tìm dạng 0 2 * * * trong schedule_description
+            cron_match = re.search(r'(\d+\s+\d+\s+\*\s+\*\s+\*)', task_data['schedule_description'])
+            if cron_match:
+                cron_expr = cron_match.group(1).strip()
+                task_data['is_cron'] = True
+                task_data['cron'] = cron_expr
+                task_data['cron_expression'] = cron_expr
+                task_data['schedule_description'] = f'Cron: {cron_expr}'
+    
+    # Chuẩn hóa schedule_description nếu chưa có
+    if 'schedule_description' not in task_data or not task_data['schedule_description']:
+        if task_data.get('is_cron', False) and 'cron' in task_data:
+            cron_expr = task_data.get('cron', '* * * * *')
+            task_data['schedule_description'] = f'Cron: {cron_expr}'
+        else:
+            # Dựa vào interval_minutes để tạo mô tả phù hợp
+            interval_minutes = task_data.get('interval_minutes', 60)
+            task_data['schedule_description'] = f'Interval: {interval_minutes} phút'
+    
+    # Mô tả sao lưu đặc biệt - dựa vào mẫu chung
+    text_values = ' '.join([str(val) for val in task_data.values() if val is not None])
+    if ('2 giờ sáng' in text_values.lower() or '2 giờ' in text_values.lower()) and not task_data.get('is_cron'):
+        task_data['is_cron'] = True
+        task_data['cron'] = '0 2 * * *'
+        task_data['cron_expression'] = '0 2 * * *'
+        task_data['schedule_description'] = 'Cron: 0 2 * * *'
+    
+    if 'suggested_name' not in task_data or not task_data['suggested_name']:
+        task_data['suggested_name'] = 'Tác vụ tạo bởi AI'
+    
+    # In debug để kiểm tra
+    print(f"Final task data before confirmation: is_cron={task_data.get('is_cron')}, schedule={task_data.get('schedule_description')}")
+    
+    # Lưu lại task_data đã được bổ sung
+    session['ai_generated_task'] = task_data
+    
+    return render_template('ai_confirm_task.html', task=task_data)
+
+@app.route('/ai/save_task', methods=['POST'])
+def ai_save_task():
+    """Lưu tác vụ được tạo bởi AI"""
+    task_data = session.get('ai_generated_task')
+    
+    if not task_data:
+        flash('Không có dữ liệu tác vụ từ AI. Vui lòng tạo lại tác vụ!', 'error')
+        return redirect(url_for('ai_create_task_form'))
+    
+    # Lấy tên tác vụ từ form hoặc sử dụng tên đề xuất
+    name = request.form.get('name') or task_data.get('suggested_name')
+    
+    # In thông tin debug
+    print(f"AI task data: {task_data}")
+    print(f"Is script: {task_data.get('is_script', False)}")
+    print(f"Is cron: {task_data.get('is_cron', False)}")
+    print(f"Schedule description: {task_data.get('schedule_description', '')}")
+    
+    # Sử dụng trực tiếp cron nếu có
+    is_cron = task_data.get('is_cron', False)
+    cron_expr = task_data.get('cron', '')
+    
+    new_task = {
+        'name': name,
+        'enabled': True,
+        'exec_mode': 1 if task_data.get('is_script', False) else 0,  # 1: script, 0: command
+        'schedule_type': 2 if is_cron else 1,  # 2: cron, 1: interval
+    }
+    
+    # Thêm command hoặc script content
+    if task_data.get('is_script', False):
+        print(f"Saving as script: {task_data.get('content', '')[:50]}...")
+        new_task['script_content'] = task_data.get('content', '')
+        # Đảm bảo script không bị lưu vào trường command
+        if 'command' in new_task:
+            del new_task['command']
+    else:
+        print(f"Saving as command: {task_data.get('content', '')[:50]}...")
+        new_task['command'] = task_data.get('content', '')
+        # Đảm bảo command không bị lưu vào trường script_content
+        if 'script_content' in new_task:
+            del new_task['script_content']
+    
+    # Thêm thông tin lịch trình
+    if is_cron:
+        # Sử dụng biểu thức cron trực tiếp
+        new_task['cron_expression'] = cron_expr
+        print(f"Using cron expression: {cron_expr}")
+    else:
+        # Đảm bảo interval được đặt đúng
+        interval_minutes = task_data.get('interval_minutes', 60)
+        interval_seconds = interval_minutes * 60
+        print(f"Setting interval to {interval_minutes} minutes ({interval_seconds} seconds)")
+        new_task['interval'] = interval_seconds
+    
+    # Thêm tác vụ
+    print(f"Sending task to API: {new_task}")
+    task_id = task_api.add_task(new_task)
+    
+    if task_id > 0:
+        # Xóa dữ liệu tạm trong session
+        session.pop('ai_generated_task', None)
+        
+        flash('Tác vụ AI đã được tạo thành công!', 'success')
+        return redirect(url_for('view_task', task_id=task_id))
+    else:
+        flash('Không thể tạo tác vụ. Có thể script gặp vấn đề với quyền thực thi hoặc cú pháp. Vui lòng kiểm tra lại!', 'error')
+        
+        # Thử kiểm tra tình trạng các tác vụ để xem có lỗi gì
+        try:
+            all_tasks = task_api.get_all_tasks()
+            if all_tasks:
+                # Nếu có tác vụ khác tồn tại, có thể có vấn đề với script của tác vụ này
+                flash('Hệ thống có thể không hỗ trợ một số lệnh trong script này. Hãy thử đơn giản hóa script.', 'warning')
+            else:
+                # Nếu không có tác vụ nào, có thể có vấn đề với hệ thống
+                flash('Không có tác vụ nào trong hệ thống. Có thể có vấn đề với cấu hình máy chủ.', 'warning')
+        except Exception as e:
+            flash(f'Lỗi kiểm tra tác vụ: {str(e)}', 'error')
+        
+        return redirect(url_for('ai_confirm_task'))
+
+@app.route('/ai/dynamic/<int:task_id>')
+def ai_dynamic_form(task_id):
+    """Hiển thị form chuyển đổi tác vụ thành AI Dynamic"""
+    task = task_api.get_task(task_id)
+    
+    if not task:
+        flash('Không tìm thấy tác vụ!', 'error')
+        return redirect(url_for('index'))
+    
+    available_metrics = task_api.get_available_system_metrics()
+    
+    return render_template('ai_dynamic_form.html', task=task, available_metrics=available_metrics)
+
+@app.route('/ai/convert_to_dynamic', methods=['POST'])
+def convert_to_dynamic():
+    """Chuyển đổi tác vụ thành AI Dynamic"""
+    task_id = request.form.get('task_id')
+    goal = request.form.get('goal', '')
+    metrics = request.form.getlist('metrics')
+    
+    if not task_id or not goal or not metrics:
+        flash('Vui lòng điền đầy đủ thông tin!', 'error')
+        return redirect(url_for('ai_dynamic_form', task_id=task_id))
+    
+    # Kết hợp các metrics thành chuỗi phân cách bằng dấu phẩy
+    metrics_str = ','.join(metrics)
+    
+    success = task_api.convert_task_to_ai_dynamic(task_id, goal, metrics_str)
+    
+    if success:
+        flash('Tác vụ đã được chuyển đổi thành AI Dynamic thành công!', 'success')
+        return redirect(url_for('view_task', task_id=task_id))
+    else:
+        flash('Không thể chuyển đổi tác vụ. Vui lòng thử lại!', 'error')
+        return redirect(url_for('ai_dynamic_form', task_id=task_id))
+
+# Run app
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000) 

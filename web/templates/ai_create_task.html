@@ -1,0 +1,180 @@
+{% extends 'layout.html' %}
+
+{% block title %}Task Scheduler - Tạo tác vụ bằng AI{% endblock %}
+
+{% block head %}
+<style>
+    textarea.form-control {
+        min-height: 150px;
+    }
+    .examples-card {
+        max-height: 300px;
+        overflow-y: auto;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Navigation breadcrumb -->
+    <div class="col-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Trang chủ</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('ai_dashboard') }}">AI Dashboard</a></li>
+                <li class="breadcrumb-item active">Tạo tác vụ từ mô tả</li>
+            </ol>
+        </nav>
+    </div>
+
+    <div class="col-md-8">
+        <div class="card shadow mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="fas fa-magic me-2"></i>Tạo tác vụ từ mô tả ngôn ngữ tự nhiên</h5>
+            </div>
+            <div class="card-body">
+                <p class="lead">Hãy mô tả tác vụ bạn muốn tạo bằng ngôn ngữ tự nhiên</p>
+                <p>Ví dụ: <em>"Sao lưu thư mục /var/www vào /backup mỗi ngày lúc 2 giờ sáng"</em></p>
+                
+                <form id="aiTaskForm" method="POST" action="{{ url_for('ai_generate_task') }}">
+                    <div class="mb-4">
+                        <label for="description" class="form-label">Mô tả tác vụ <span class="text-danger">*</span></label>
+                        <textarea class="form-control" id="description" name="description" 
+                                  placeholder="Nhập mô tả chi tiết về tác vụ bạn muốn thực hiện..." required></textarea>
+                        <div class="form-text mt-2">
+                            <i class="fas fa-lightbulb text-warning me-1"></i>
+                            Mô tả càng chi tiết, kết quả càng chính xác. Hãy đề cập đến tần suất/thời gian nếu cần lập lịch.
+                        </div>
+                    </div>
+                    
+                    <div class="mt-4">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-magic me-2"></i>Tạo tác vụ với AI
+                        </button>
+                        <a href="{{ url_for('ai_dashboard') }}" class="btn btn-outline-secondary ms-2">
+                            <i class="fas fa-arrow-left me-2"></i>Quay lại
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4">
+        <!-- Examples Card -->
+        <div class="card shadow mb-4">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0"><i class="fas fa-lightbulb me-2"></i>Ví dụ</h5>
+            </div>
+            <div class="card-body examples-card">
+                <div class="d-grid gap-3">
+                    <div class="example-item border-bottom pb-2">
+                        <h6>Quản lý ổ đĩa</h6>
+                        <p class="example-text small">Kiểm tra dung lượng ổ đĩa / mỗi giờ và gửi cảnh báo nếu ít hơn 10% còn trống</p>
+                        <button class="btn btn-sm btn-outline-primary use-example">Sử dụng</button>
+                    </div>
+                    
+                    <div class="example-item border-bottom pb-2">
+                        <h6>Sao lưu dữ liệu</h6>
+                        <p class="example-text small">Sao lưu thư mục /home/user/documents vào /backup hàng ngày lúc 2 giờ sáng</p>
+                        <button class="btn btn-sm btn-outline-primary use-example">Sử dụng</button>
+                    </div>
+                    
+                    <div class="example-item border-bottom pb-2">
+                        <h6>Làm sạch dữ liệu tạm</h6>
+                        <p class="example-text small">Xóa tất cả các file trong /tmp cũ hơn 7 ngày vào mỗi Chủ Nhật lúc 3 giờ sáng</p>
+                        <button class="btn btn-sm btn-outline-primary use-example">Sử dụng</button>
+                    </div>
+                    
+                    <div class="example-item border-bottom pb-2">
+                        <h6>Kiểm tra dịch vụ</h6>
+                        <p class="example-text small">Kiểm tra dịch vụ nginx mỗi 5 phút và khởi động lại nếu không hoạt động</p>
+                        <button class="btn btn-sm btn-outline-primary use-example">Sử dụng</button>
+                    </div>
+                    
+                    <div class="example-item border-bottom pb-2">
+                        <h6>Đồng bộ hóa dữ liệu</h6>
+                        <p class="example-text small">Đồng bộ hóa thư mục /var/www với máy chủ từ xa rsync://backup.server.com/www mỗi giờ</p>
+                        <button class="btn btn-sm btn-outline-primary use-example">Sử dụng</button>
+                    </div>
+                    
+                    <div class="example-item">
+                        <h6>Thông báo nhắc nhở</h6>
+                        <p class="example-text small">Gửi email nhắc nhở cập nhật hệ thống vào mỗi thứ Hai đầu tháng</p>
+                        <button class="btn btn-sm btn-outline-primary use-example">Sử dụng</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Tips Card -->
+        <div class="card shadow">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0"><i class="fas fa-info-circle me-2"></i>Mẹo</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item"><i class="fas fa-clock text-success me-2"></i>Đề cập đến thời gian hoặc tần suất (ví dụ: mỗi ngày, mỗi giờ) để AI có thể tạo lịch trình phù hợp.</li>
+                    <li class="list-group-item"><i class="fas fa-folder text-success me-2"></i>Nếu liên quan đến file hoặc thư mục, hãy chỉ định đường dẫn đầy đủ.</li>
+                    <li class="list-group-item"><i class="fas fa-exclamation-triangle text-success me-2"></i>Mô tả rõ điều kiện nếu có (ví dụ: "nếu dung lượng dưới 10%").</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Sử dụng ví dụ
+    document.querySelectorAll('.use-example').forEach(button => {
+        button.addEventListener('click', function() {
+            const exampleText = this.previousElementSibling.textContent;
+            document.getElementById('description').value = exampleText;
+        });
+    });
+    
+    // Hiển thị loading khi submit form
+    document.getElementById('aiTaskForm').addEventListener('submit', function() {
+        const submitButton = this.querySelector('button[type="submit"]');
+        submitButton.disabled = true;
+        
+        // Hiển thị spinner + thông báo
+        submitButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Đang tạo tác vụ...';
+        
+        // Thêm thông báo phía trên form
+        const formSection = document.querySelector('.card-body');
+        const loadingAlert = document.createElement('div');
+        loadingAlert.className = 'alert alert-info mb-4';
+        loadingAlert.id = 'ai-loading-alert';
+        loadingAlert.innerHTML = `
+            <div class="d-flex align-items-center">
+                <div class="spinner-border spinner-border-sm me-3" role="status"></div>
+                <div>
+                    <strong>Đang xử lý...</strong><br>
+                    <small>Quá trình tạo tác vụ AI có thể mất từ 10-30 giây. Vui lòng không làm mới trang.</small>
+                </div>
+            </div>
+        `;
+        
+        // Thêm thông báo vào đầu form
+        formSection.insertBefore(loadingAlert, formSection.firstChild);
+        
+        // Set timeout để thay đổi thông báo nếu quá lâu
+        setTimeout(function() {
+            const alert = document.getElementById('ai-loading-alert');
+            if (alert) {
+                alert.innerHTML = `
+                    <div class="d-flex align-items-center">
+                        <div class="spinner-border spinner-border-sm me-3" role="status"></div>
+                        <div>
+                            <strong>Vẫn đang xử lý...</strong><br>
+                            <small>AI đang tạo lệnh và lịch trình phù hợp, có thể mất thêm chút thời gian.</small>
+                        </div>
+                    </div>
+                `;
+            }
+        }, 10000);
+    });
+</script>
+{% endblock %} 
