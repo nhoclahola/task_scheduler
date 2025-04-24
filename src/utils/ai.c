@@ -149,6 +149,9 @@ char* ai_parse_deepseek_response(const char *response_json) {
         return NULL;
     }
     
+    // Log the full response for debugging
+    log_message(LOG_DEBUG, "Raw API response: %s", response_json);
+    
     cJSON *root = cJSON_Parse(response_json);
     if (!root) {
         const char *error_ptr = cJSON_GetErrorPtr();
@@ -157,6 +160,41 @@ char* ai_parse_deepseek_response(const char *response_json) {
         } else {
             log_message(LOG_ERROR, "Error parsing JSON");
         }
+        
+        // Try to find JSON directly in the response
+        log_message(LOG_DEBUG, "Attempting to extract JSON object from response text");
+        const char *start = strchr(response_json, '{');
+        const char *end = strrchr(response_json, '}');
+        
+        if (start && end && end > start) {
+            size_t json_len = end - start + 1;
+            char *json_content = (char *)malloc(json_len + 1);
+            
+            if (json_content) {
+                memcpy(json_content, start, json_len);
+                json_content[json_len] = '\0';
+                
+                log_message(LOG_DEBUG, "Extracted potential JSON: %s", json_content);
+                
+                // Check if this is valid JSON
+                cJSON *json_test = cJSON_Parse(json_content);
+                if (json_test) {
+                    // Check if it has the required fields for an AI task
+                    if (cJSON_GetObjectItem(json_test, "is_script") && 
+                        cJSON_GetObjectItem(json_test, "content") &&
+                        cJSON_GetObjectItem(json_test, "schedule")) {
+                        
+                        log_message(LOG_INFO, "Successfully extracted valid task JSON from response");
+                        cJSON_Delete(json_test);
+                        return json_content;
+                    }
+                    cJSON_Delete(json_test);
+                }
+                
+                free(json_content);
+            }
+        }
+        
         return NULL;
     }
     
@@ -205,17 +243,66 @@ char* ai_parse_deepseek_response(const char *response_json) {
     char *end = start + strlen(start) - 1;
     while (end > start && isspace((unsigned char)*end)) *end-- = '\0';
     
+    // Log the command for debugging
+    log_message(LOG_DEBUG, "Parsed command: %s", start);
+    
+    // Step 1: If response is already a JSON object (starts with {), return as is
+    if (start[0] == '{') {
+        // Make sure it's valid JSON
+        cJSON *json_test = cJSON_Parse(start);
+        if (json_test) {
+            cJSON_Delete(json_test);
+            
+            // If the command isn't at the beginning of the buffer, move it
+            if (start != command) {
+                char *result = strdup(start);
+                free(command);
+                return result;
+            }
+            
+            return command;
+        }
+    }
+    
     // If the command starts with triple backticks (markdown code block), remove them
     if (strncmp(start, "```", 3) == 0) {
         start += 3;
-        // Skip the language identifier if present
-        while (*start && !isspace((unsigned char)*start)) start++;
+        
+        // Check for "json" language identifier
+        if (strncmp(start, "json", 4) == 0) {
+            start += 4;
+        }
+        
+        // Skip any whitespace
         while (*start && isspace((unsigned char)*start)) start++;
         
         // Find the closing backticks
         char *closing = strstr(start, "```");
         if (closing) {
             *closing = '\0';
+        }
+    }
+    
+    // Try to find JSON object in the content
+    char *json_start = strchr(start, '{');
+    char *json_end = strrchr(start, '}');
+    
+    if (json_start && json_end && json_end > json_start) {
+        // Extract the JSON part
+        size_t json_len = json_end - json_start + 1;
+        char *json_part = (char *)malloc(json_len + 1);
+        if (json_part) {
+            strncpy(json_part, json_start, json_len);
+            json_part[json_len] = '\0';
+            
+            // Test if valid JSON
+            cJSON *json_test = cJSON_Parse(json_part);
+            if (json_test) {
+                cJSON_Delete(json_test);
+                free(command);
+                return json_part;
+            }
+            free(json_part);
         }
     }
     
@@ -572,13 +659,14 @@ bool ai_generate_complete_task(const char *description, AIGeneratedTask *result)
     // Prepare system prompt for complete task generation
     const char *system_prompt = 
         "You are a scheduling expert that generates complete task configurations for a Linux task scheduler.\n\n"
+        "IMPORTANT: Your response MUST ONLY be a valid JSON object with NO additional text, code formatting, or explanations.\n\n"
         "Given a natural language task description, generate the following:\n"
         "1. A suitable shell command or script to accomplish the task\n"
         "2. An appropriate schedule (either cron expression or interval in minutes)\n"
         "3. A brief description of the schedule for human understanding\n"
         "4. A suggested task name that is concise but descriptive\n\n"
         
-        "Return your answer in a JSON format like this:\n"
+        "Return your answer in EXACTLY this JSON format with NO additional text:\n"
         "{\n"
         "  \"is_script\": true/false,\n"
         "  \"content\": \"the shell command or script content\",\n"
@@ -601,7 +689,7 @@ bool ai_generate_complete_task(const char *description, AIGeneratedTask *result)
         "- Parse the natural language description to identify time intervals ('every 5 minutes', 'daily at 2pm', etc.)\n\n"
         
         "Examples:\n"
-        "1. For 'check disk space every 10 minutes and notify if less than 10% free':\n"
+        "1. For 'check disk space every 10 minutes and notify if less than 10% free', return ONLY:\n"
         "{\n"
         "  \"is_script\": true,\n"
         "  \"content\": \"#!/bin/bash\\n\\nDISK_PATH=\\\"/\\\"\\nTHRESHOLD=10\\n\\nFREE_PERCENT=$(df -h \\\"$DISK_PATH\\\" | grep -v Filesystem | awk '{print 100-$5}')\\n\\nif [ \\\"$FREE_PERCENT\\\" -lt \\\"$THRESHOLD\\\" ]; then\\n    notify-send \\\"Disk Space Alert\\\" \\\"Only $FREE_PERCENT% free on $DISK_PATH\\\"\\n    exit 1\\nfi\\n\\nexit 0\\n\",\n"
@@ -611,7 +699,7 @@ bool ai_generate_complete_task(const char *description, AIGeneratedTask *result)
         "  \"suggested_name\": \"disk_space_monitor\"\n"
         "}\n\n"
         
-        "2. For 'backup home directory to /mnt/backup every day at 2am':\n"
+        "2. For 'backup home directory to /mnt/backup every day at 2am', return ONLY:\n"
         "{\n"
         "  \"is_script\": true,\n"
         "  \"content\": \"#!/bin/bash\\n\\nBACKUP_SOURCE=\\\"$HOME\\\"\\nBACKUP_DEST=\\\"/mnt/backup\\\"\\nBACKUP_DATE=$(date +%Y-%m-%d)\\n\\n# Check if destination exists\\nif [ ! -d \\\"$BACKUP_DEST\\\" ]; then\\n    echo \\\"Backup destination not found: $BACKUP_DEST\\\"\\n    exit 1\\nfi\\n\\n# Create backup\\ntar -czf \\\"$BACKUP_DEST/home_backup_$BACKUP_DATE.tar.gz\\\" \\\"$BACKUP_SOURCE\\\" 2>/dev/null\\n\\nif [ $? -eq 0 ]; then\\n    echo \\\"Backup completed successfully\\\"\\n    exit 0\\nelse\\n    echo \\\"Backup failed\\\"\\n    exit 1\\nfi\\n\",\n"
@@ -621,7 +709,7 @@ bool ai_generate_complete_task(const char *description, AIGeneratedTask *result)
         "  \"suggested_name\": \"daily_home_backup\"\n"
         "}\n\n"
         
-        "Always analyze the task description carefully to determine the appropriate command, script, and schedule. Be precise and practical.";
+        "REMINDER: Your response must be a valid JSON object ONLY. Do not include ANY explanations, markdown formatting, or anything outside the JSON object.";
     
     // Call DeepSeek API to generate the complete task
     char *api_response = ai_call_deepseek_api(api_key, system_prompt, description);
