@@ -9,6 +9,214 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+// Hàm mới để xác định nếu một giá trị nằm trong biểu thức cron field
+// Xử lý cả số cụ thể, khoảng (1-5), danh sách (1,3,5), bước nhảy (*/2, 1-10/2)
+static bool is_matching_cron_field(const char *field_expr, int value) {
+    // Kiểm tra wildcard "*" - khớp với mọi giá trị
+    if (strcmp(field_expr, "*") == 0) {
+        return true;
+    }
+    
+    // Kiểm tra giá trị cụ thể
+    if (isdigit((unsigned char)field_expr[0])) {
+        int specific_value;
+        if (sscanf(field_expr, "%d", &specific_value) == 1) {
+            if (specific_value == value) {
+                return true;
+            }
+        }
+    }
+    
+    // Kiểm tra khoảng (range) - ví dụ "1-5"
+    int range_start, range_end;
+    if (sscanf(field_expr, "%d-%d", &range_start, &range_end) == 2) {
+        if (value >= range_start && value <= range_end) {
+            return true;
+        }
+    }
+    
+    // Kiểm tra danh sách - ví dụ "1,3,5,7"
+    char *field_copy = strdup(field_expr);
+    if (field_copy) {
+        char *token = strtok(field_copy, ",");
+        while (token) {
+            // Kiểm tra từng phần tử trong danh sách
+            int list_val;
+            if (sscanf(token, "%d", &list_val) == 1) {
+                if (list_val == value) {
+                    free(field_copy);
+                    return true;
+                }
+            }
+            
+            // Kiểm tra khoảng trong danh sách
+            int list_range_start, list_range_end;
+            if (sscanf(token, "%d-%d", &list_range_start, &list_range_end) == 2) {
+                if (value >= list_range_start && value <= list_range_end) {
+                    free(field_copy);
+                    return true;
+                }
+            }
+            
+            token = strtok(NULL, ",");
+        }
+        free(field_copy);
+    }
+    
+    // Kiểm tra bước nhảy (step) - ví dụ "*/2", "1-10/2"
+    if (strstr(field_expr, "/") != NULL) {
+        char range_part[32] = "*";
+        int step = 1;
+        
+        if (sscanf(field_expr, "%31[^/]/%d", range_part, &step) == 2 && step > 0) {
+            // Xác định phạm vi
+            int min_val = 0, max_val = 59; // Mặc định cho phút
+            
+            // Xử lý phạm vi cụ thể
+            if (strcmp(range_part, "*") != 0) {
+                int range_start = 0, range_end = 59;
+                if (sscanf(range_part, "%d-%d", &range_start, &range_end) == 2) {
+                    min_val = range_start;
+                    max_val = range_end;
+                } else if (sscanf(range_part, "%d", &range_start) == 1) {
+                    min_val = range_start;
+                    max_val = 59; // Cho phút
+                }
+            }
+            
+            // Kiểm tra nếu giá trị nằm trong phạm vi và chia hết cho bước
+            if (value >= min_val && value <= max_val && (value - min_val) % step == 0) {
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
+// Hàm mới để tìm ngày tiếp theo mà biểu thức cron của chúng ta sẽ chạy
+static time_t find_next_cron_time(const char *cron_expr, time_t now) {
+    char min_str[32], hr_str[32], dom_str[32], mon_str[32], dow_str[32];
+    if (sscanf(cron_expr, "%31s %31s %31s %31s %31s", 
+              min_str, hr_str, dom_str, mon_str, dow_str) != 5) {
+        // Lỗi phân tích cú pháp, sử dụng mặc định sau 1 giờ
+        return now + 3600;
+    }
+    
+    struct tm *tm_now = localtime(&now);
+    struct tm next = *tm_now;
+    next.tm_sec = 0;
+    
+    // Bắt đầu từ phút tiếp theo
+    next.tm_min++;
+    if (next.tm_min >= 60) {
+        next.tm_min = 0;
+        next.tm_hour++;
+        if (next.tm_hour >= 24) {
+            next.tm_hour = 0;
+            next.tm_mday++;
+            // mktime sẽ xử lý chuyển đổi ngày/tháng nếu cần
+        }
+    }
+    
+    // Tìm thời gian hợp lệ tiếp theo, tối đa 366 ngày vào tương lai
+    for (int days = 0; days < 366; days++) {
+        for (int hours = 0; hours < 24; hours++) {
+            for (int minutes = 0; minutes < 60; minutes++) {
+                // Nếu vượt qua ngày đầu tiên, reset về đầu ngày
+                if (days > 0 && hours == 0 && minutes == 0) {
+                    next.tm_hour = 0;
+                    next.tm_min = 0;
+                }
+                
+                // Nếu vượt qua giờ đầu tiên của ngày, reset về đầu giờ
+                if (hours > 0 && minutes == 0) {
+                    next.tm_min = 0;
+                }
+                
+                // Kiểm tra nếu thời điểm hiện tại khớp với biểu thức cron
+                // Sử dụng phương pháp loại trừ - nếu bất kỳ trường nào không khớp, thì tiếp tục
+                
+                // Kiểm tra phút
+                if (!is_matching_cron_field(min_str, next.tm_min)) {
+                    // Tăng phút lên và kiểm tra lại
+                    next.tm_min++;
+                    if (next.tm_min >= 60) {
+                        next.tm_min = 0;
+                        next.tm_hour++;
+                        if (next.tm_hour >= 24) {
+                            next.tm_hour = 0;
+                            next.tm_mday++;
+                            mktime(&next); // Điều chỉnh ngày/tháng nếu cần
+                        }
+                    }
+                    continue;
+                }
+                
+                // Kiểm tra giờ
+                if (!is_matching_cron_field(hr_str, next.tm_hour)) {
+                    // Tăng giờ và reset phút
+                    next.tm_hour++;
+                    next.tm_min = 0;
+                    if (next.tm_hour >= 24) {
+                        next.tm_hour = 0;
+                        next.tm_mday++;
+                        mktime(&next); // Điều chỉnh ngày/tháng nếu cần
+                    }
+                    continue;
+                }
+                
+                // Thực hiện chuẩn hóa struct tm
+                mktime(&next);
+                
+                // Kiểm tra ngày trong tháng
+                if (!is_matching_cron_field(dom_str, next.tm_mday)) {
+                    // Chuyển sang ngày tiếp theo
+                    next.tm_mday++;
+                    next.tm_hour = 0;
+                    next.tm_min = 0;
+                    mktime(&next); // Điều chỉnh nếu cần
+                    continue;
+                }
+                
+                // Kiểm tra tháng (phải +1 vì tm_mon bắt đầu từ 0 nhưng cron từ 1)
+                if (!is_matching_cron_field(mon_str, next.tm_mon + 1)) {
+                    // Chuyển sang tháng tiếp theo
+                    next.tm_mon++;
+                    next.tm_mday = 1;
+                    next.tm_hour = 0;
+                    next.tm_min = 0;
+                    mktime(&next); // Điều chỉnh nếu cần
+                    continue;
+                }
+                
+                // Kiểm tra ngày trong tuần (0 = Chủ nhật trong struct tm)
+                int dow_value = next.tm_wday;
+                
+                // Điều chỉnh để 0 = Chủ nhật, 1 = Thứ hai, ... như trong cron
+                if (!is_matching_cron_field(dow_str, dow_value)) {
+                    // Nếu DOM là wildcard (*) và DOW không khớp, thì tăng 1 ngày
+                    if (strcmp(dom_str, "*") == 0) {
+                        next.tm_mday++;
+                        next.tm_hour = 0;
+                        next.tm_min = 0;
+                        mktime(&next);
+                        continue;
+                    }
+                    // Nếu cả DOM và DOW đều chỉ định, chúng được giải thích là OR
+                    // Nếu DOM khớp, chúng ta đã OK từ các kiểm tra trước
+                }
+                
+                // Nếu tất cả các kiểm tra đều pass, đây là thời gian hợp lệ tiếp theo
+                return mktime(&next);
+            }
+        }
+    }
+    
+    // Nếu không tìm thấy thời gian hợp lệ, sử dụng mặc định sau 1 giờ
+    return now + 3600;
+}
+
 bool task_init(Task *task) {
     if (!task) {
         return false;
@@ -76,122 +284,35 @@ bool task_calculate_next_run(Task *task) {
             return true;
             
         case SCHEDULE_CRON:
-            // For cron-based scheduling, calculate next run using cron expression
+            // Sử dụng hàm phân tích cron được cải thiện để tìm thời gian hợp lệ tiếp theo
             if (task->cron_expression[0] != '\0') {
-                // Simple cron parsing for common patterns
-                // Format: min hour day month weekday
+                time_t next_time = find_next_cron_time(task->cron_expression, now);
                 
-                time_t next_time = now;
-                
-                // Handle pattern "* * * * *" (every minute)
-                if (strcmp(task->cron_expression, "* * * * *") == 0) {
-                    // Calculate next minute
-                    next_time = now + 60;
+                if (next_time > now) {
                     task->next_run_time = next_time;
+                    
+                    // Log thời gian chạy tiếp theo
+                    char time_str[64];
+                    struct tm *next_tm = localtime(&task->next_run_time);
+                    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", next_tm);
+                    log_message(LOG_DEBUG, "Task %d (%s): Next run time for cron '%s' is %s",
+                               task->id, task->name, task->cron_expression, time_str);
+                    
                     return true;
-                }
-                
-                // Handle pattern "*/n * * * *" (every n minutes)
-                if (strncmp(task->cron_expression, "*/", 2) == 0 && 
-                    strchr(task->cron_expression, ' ') != NULL) {
-                    int minutes = atoi(task->cron_expression + 2);
-                    if (minutes > 0) {
-                        // To ensure execution at standard minute points (0, n, 2n, ...),
-                        // we need to align the next run time properly
-                        time_t now_seconds = now % 60;
-                        time_t now_minutes = (now / 60) % 60;
-                        time_t minutes_offset = now_minutes % minutes;
-                        
-                        // If partway through a cycle, calculate remaining time
-                        time_t wait_time;
-                        if (minutes_offset == 0 && now_seconds == 0) {
-                            // Exactly at cycle minute point, wait full n minutes
-                            wait_time = minutes * 60;
-                        } else {
-                            // Wait until next minute in the cycle
-                            wait_time = ((minutes - minutes_offset) * 60) - now_seconds;
-                        }
-                        
-                        next_time = now + wait_time;
-                        task->next_run_time = next_time;
-                        return true;
-                    }
-                }
-                
-                // Handle pattern "0 * * * *" (every hour at minute 0)
-                if (strcmp(task->cron_expression, "0 * * * *") == 0) {
-                    struct tm *tm_now = localtime(&now);
-                    struct tm next;
-                    memcpy(&next, tm_now, sizeof(struct tm));
-                    
-                    // Calculate next hour, minute 0
-                    next.tm_min = 0;
-                    next.tm_sec = 0;
-                    next.tm_hour += 1;
-                    
-                    time_t next_hour = mktime(&next);
-                    if (next_hour <= now) {
-                        next_hour = now + 3600; // If calculation error, default to 1 hour later
-                    }
-                    
-                    task->next_run_time = next_hour;
-                    return true;
-                }
-                
-                // Handle pattern "0 0 * * *" (every day at 00:00)
-                if (strcmp(task->cron_expression, "0 0 * * *") == 0) {
-                    struct tm *tm_now = localtime(&now);
-                    struct tm next;
-                    memcpy(&next, tm_now, sizeof(struct tm));
-                    
-                    // Calculate next day, minute 0, hour 0
-                    next.tm_min = 0;
-                    next.tm_sec = 0;
-                    next.tm_hour = 0;
-                    next.tm_mday += 1;
-                    
-                    time_t next_day = mktime(&next);
-                    if (next_day <= now) {
-                        next_day = now + 86400; // If calculation error, default to 1 day later
-                    }
-                    
-                    task->next_run_time = next_day;
-                    return true;
-                }
-                
-                // For other cron patterns that we don't handle specifically,
-                // use smarter fallback logic
-                
-                // If run before, schedule next based on recent interval
-                if (task->last_run_time > 0) {
-                    // For cron expressions not fully supported, use fallback logic
-                    if (strstr(task->cron_expression, "* * * *") != NULL) {
-                        // Indication of running every minute
-                        task->next_run_time = now + 60;
-                    } else if (strstr(task->cron_expression, "0 * * *") != NULL) {
-                        // Indication of running every hour
-                        task->next_run_time = now + 3600;
-                    } else if (strstr(task->cron_expression, "0 0 * *") != NULL) {
-                        // Indication of running every day
-                        task->next_run_time = now + 86400;
-                    } else {
-                        // Default to 1 hour later
-                        task->next_run_time = now + 3600;
-                    }
                 } else {
-                    // If never run before, schedule for 1 minute later
-                    task->next_run_time = now + 60;
+                    // Fallback nếu tính toán cron thất bại
+                    log_message(LOG_WARNING, "Task %d (%s): Cron calculation failed, using hourly fallback",
+                               task->id, task->name);
+                    task->next_run_time = now + 3600;
+                    return true;
                 }
-                
-                // Print debug message
-                log_message(LOG_DEBUG, "Cron expression '%s' not fully supported. Using default scheduling.", 
-                           task->cron_expression);
             } else {
                 // Invalid cron expression
                 task->next_run_time = 0;
                 log_message(LOG_WARNING, "Empty or invalid cron expression");
+                return true;
             }
-            return true;
+            break;
     }
     
     // Legacy frequency-based scheduling (for backward compatibility)
@@ -324,27 +445,19 @@ bool task_mark_executed(Task *task, int exit_code) {
     log_message(LOG_DEBUG, "Task %d (%s): Marked as executed with exit_code=%d", 
                task->id, task->name, exit_code);
     
-    if (task->schedule_type == SCHEDULE_CRON) {
-        log_message(LOG_DEBUG, "Task %d (%s): Calculating next run time for cron task with expression '%s'", 
-                   task->id, task->name, task->cron_expression);
-    } else if (task->schedule_type == SCHEDULE_INTERVAL) {
-        log_message(LOG_DEBUG, "Task %d (%s): Calculating next run time for interval task with interval %d minutes", 
-                   task->id, task->name, task->interval);
-    }
-    
-    // Update the next run time
+    // Tính toán thời gian chạy tiếp theo
     bool result = task_calculate_next_run(task);
     
-    // Ghi log kết quả tính toán thời gian chạy tiếp theo
-    if (result) {
-        char next_time_str[64];
-        time_to_string(task->next_run_time, next_time_str, sizeof(next_time_str), NULL);
-        
-        log_message(LOG_DEBUG, "Task %d (%s): Calculated next run time = %s (old: %ld, new: %ld)",
-                  task->id, task->name, next_time_str, old_next_run, task->next_run_time);
+    // Log thời gian chạy tiếp theo
+    char time_str[64];
+    if (task->next_run_time > 0) {
+        struct tm *next_tm = localtime(&task->next_run_time);
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", next_tm);
+        log_message(LOG_DEBUG, "Task %d (%s): Next run time calculated: %s", 
+                   task->id, task->name, time_str);
     } else {
-        log_message(LOG_ERROR, "Task %d (%s): Failed to calculate next run time",
-                  task->id, task->name);
+        log_message(LOG_DEBUG, "Task %d (%s): No next run time scheduled", 
+                   task->id, task->name);
     }
     
     return result;

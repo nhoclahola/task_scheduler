@@ -1739,31 +1739,55 @@ void cli_create_ai_task_with_agent(int argc, char *argv[]) {
     }
     printf("Suggested Name: %s\n", ai_task.suggested_name);
     
-    // Confirm adding task
-    printf("\nDo you want to create this task? (y/n): ");
-    char confirm[10];
-    if (fgets(confirm, sizeof(confirm), stdin) == NULL || (confirm[0] != 'y' && confirm[0] != 'Y')) {
-        printf("Task creation cancelled\n");
-        return;
+    // Kiểm tra xem có phải đang chạy trong chế độ interactive không
+    // Nếu có đối số -y hoặc đang gọi từ API (có thể nhận diện thông qua environ hoặc flag), 
+    // thì tự động xác nhận mà không hỏi
+    bool auto_confirm = false;
+    
+    // Kiểm tra xem có đối số -y trong command line không
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "-y") == 0 || strcmp(argv[i], "--yes") == 0) {
+            auto_confirm = true;
+            break;
+        }
     }
     
-    // Ask for task name
-    printf("Enter a name for the task (press Enter to use suggested name): ");
-    char task_name[256];
-    if (fgets(task_name, sizeof(task_name), stdin) != NULL) {
-        // Remove newline character
-        char *nl = strchr(task_name, '\n');
-        if (nl) *nl = '\0';
-        
-        // If user didn't enter anything, use the suggested name
-        if (task_name[0] != '\0') {
-            safe_strcpy(task.name, task_name, sizeof(task.name));
-        } else {
-            safe_strcpy(task.name, ai_task.suggested_name, sizeof(task.name));
+    // Kiểm tra xem có phải được gọi từ Python API không
+    char *from_api = getenv("FROM_TASKSCHEDULER_API");
+    if (from_api && (strcmp(from_api, "1") == 0 || strcmp(from_api, "true") == 0)) {
+        auto_confirm = true;
+    }
+    
+    // Nếu đang chạy trong một pipe, có thể là từ script hoặc API
+    if (!isatty(fileno(stdin))) {
+        auto_confirm = true;
+    }
+    
+    char task_name[256] = {0};
+    
+    if (!auto_confirm) {
+        // Confirm adding task
+        printf("\nDo you want to create this task? (y/n): ");
+        char confirm[10];
+        if (fgets(confirm, sizeof(confirm), stdin) == NULL || (confirm[0] != 'y' && confirm[0] != 'Y')) {
+            printf("Task creation cancelled\n");
+            return;
         }
-    } else {
-        // If there's an error reading input, use suggested name
+        
+        // Ask for task name
+        printf("Enter a name for the task (press Enter to use suggested name): ");
+        if (fgets(task_name, sizeof(task_name), stdin) != NULL) {
+            // Remove newline character
+            char *nl = strchr(task_name, '\n');
+            if (nl) *nl = '\0';
+        }
+    }
+    
+    // Nếu người dùng không nhập tên hoặc tự động xác nhận, sử dụng tên đề xuất
+    if (task_name[0] == '\0') {
         safe_strcpy(task.name, ai_task.suggested_name, sizeof(task.name));
+    } else {
+        safe_strcpy(task.name, task_name, sizeof(task.name));
     }
     
     // Set execution mode and content based on AI result
