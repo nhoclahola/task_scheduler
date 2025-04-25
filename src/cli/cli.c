@@ -174,7 +174,7 @@ void cli_print_help(void) {
 
 void cli_print_version(void) {
     printf("Task Scheduler version %s\n", VERSION);
-    printf("Copyright (C) 2023\n");
+    printf("Copyright (C) 2025\n");
     printf("License: MIT\n");
 }
 
