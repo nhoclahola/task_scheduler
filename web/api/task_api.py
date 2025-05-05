@@ -761,80 +761,112 @@ class TaskAPI:
             print(f"Task {task_id} {enabled_status}d successfully")
             return True
             
-        # Lấy thông tin hiện tại của task trước khi xóa
+        # Lấy thông tin hiện tại của task trước khi cập nhật
         current_task = self.get_task(task_id)
         if not current_task:
             print(f"Error: Cannot find task {task_id} to update")
             return False
-            
-        # Lưu giá trị last_run_time và exit_code từ task hiện tại
-        last_run_time = current_task.get('last_run_time', 0)
-        exit_code_value = current_task.get('exit_code', 0)
         
-        # Bảo tồn thông tin phụ thuộc hiện tại nếu không được cập nhật
-        if 'dependencies' not in task_data and 'dependencies' in current_task:
-            task_data['dependencies'] = current_task['dependencies']
-        if 'dep_behavior' not in task_data and 'dep_behavior' in current_task:
-            task_data['dep_behavior'] = current_task['dep_behavior']
+        # Sử dụng lệnh edit để cập nhật từng trường thay vì xóa và tạo lại
+        success = True
         
-        # Đầu tiên, xóa tác vụ cũ
-        remove_exit_code, output = self._run_command(f"remove {task_id}")
-        if remove_exit_code != 0:
-            print(f"Error removing old task: {output}")
-            return False
+        # Cập nhật tên
+        if 'name' in task_data and task_data['name'] != current_task.get('name', ''):
+            name = task_data['name'].replace('"', '\\"')  # Escape dấu ngoặc kép
+            edit_cmd = f'edit {task_id} name "{name}"'
+            exit_code, output = self._run_command(edit_cmd)
+            if exit_code != 0:
+                print(f"Error updating task name: {output}")
+                success = False
         
-        # Chuẩn bị lệnh thêm tác vụ mới
-        name = task_data.get('name', '').replace('"', '\\"')  # Escape dấu ngoặc kép trong tên
-        command = task_data.get('command', '').replace('"', '\\"')  # Escape dấu ngoặc kép trong lệnh
-        
-        cmd_parts = [f'add "{name}"']
-        
-        # Xử lý chế độ thực thi
-        exec_mode = task_data.get('exec_mode', 0)
+        # Cập nhật lệnh nếu trong chế độ lệnh
+        exec_mode = task_data.get('exec_mode', current_task.get('exec_mode', 0))
         
         if exec_mode == 0:  # Chế độ lệnh
-            # Thêm lệnh nếu có
-            if command:
-                cmd_parts.append(f'"{command}"')
-        else:  # Chế độ script
-            # Kiểm tra xem có script_file hay không
-            if 'script_file' in task_data and task_data['script_file']:
-                script_file = task_data['script_file'].replace('"', '\\"')
+            if 'command' in task_data and task_data['command'] != current_task.get('command', ''):
+                command = task_data['command'].replace('"', '\\"')  # Escape dấu ngoặc kép
+                if current_task.get('exec_mode', 0) != 0:
+                    # Chuyển từ chế độ khác sang chế độ lệnh
+                    convert_cmd = f'to-command {task_id} "{command}"'
+                    exit_code, output = self._run_command(convert_cmd)
+                else:
+                    # Chỉ cập nhật lệnh
+                    edit_cmd = f'edit {task_id} command "{command}"'
+                    exit_code, output = self._run_command(edit_cmd)
                 
-                # Kiểm tra xem file có tồn tại và có nội dung không
-                try:
-                    if os.path.exists(script_file):
-                        # Đọc nội dung file để kiểm tra
-                        with open(script_file, 'r') as f:
-                            script_content = f.read().strip()
-                        
-                        if not script_content:
-                            # File trống, thêm nội dung mẫu
-                            with open(script_file, 'w') as f:
-                                f.write('#!/bin/bash\n\necho "Hello from script"\n')
-                            print(f"Added sample content to empty script file: {script_file}")
-                    else:
-                        print(f"Script file not found: {script_file}")
-                        # Quay lại sử dụng lệnh trực tiếp
-                        cmd_parts.append(f'"echo Script file not found: {os.path.basename(script_file)}"')
-                        exec_mode = 0
-                except Exception as e:
-                    print(f"Error checking script file: {e}")
-                    # Quay lại sử dụng lệnh trực tiếp
-                    cmd_parts.append(f'"echo Error with script file: {os.path.basename(script_file)}"')
-                    exec_mode = 0
-                
-                # Nếu vẫn ở chế độ script, thêm tham số file
-                if exec_mode == 1:
-                    cmd_parts.append('-f')
-                    cmd_parts.append(f'"{script_file}"')
+                if exit_code != 0:
+                    print(f"Error updating command: {output}")
+                    success = False
+        
+        elif exec_mode == 1:  # Chế độ script
+            # Xử lý nội dung script
+            script_content = None
             
-            # Hoặc dùng script_content
-            elif 'script_content' in task_data and task_data['script_content']:
+            if 'script_content' in task_data and task_data['script_content']:
                 script_content = task_data['script_content'].strip()
-                
-                if script_content:
-                    # Tạo file script tạm thời từ nội dung
+            elif 'script_file' in task_data and task_data['script_file']:
+                try:
+                    with open(task_data['script_file'], 'r') as f:
+                        script_content = f.read()
+                except Exception as e:
+                    print(f"Error reading script file: {e}")
+            
+            if script_content:
+                # Kiểm tra xem có đang chuyển từ command sang script không
+                if current_task.get('exec_mode', 0) == 0:
+                    print("Chuyển từ command sang script - tạo lại task")
+                    # Trong trường hợp này cần xóa task cũ và tạo lại để tránh lỗi
+                    
+                    # Lưu lại tất cả thông tin task hiện tại
+                    new_task_data = current_task.copy()
+                    
+                    # Cập nhật với thông tin mới
+                    new_task_data.update(task_data)
+                    
+                    # Đảm bảo exec_mode là script
+                    new_task_data['exec_mode'] = 1
+                    new_task_data['script_content'] = script_content
+                    
+                    # Xóa ID để tránh xung đột khi tạo mới
+                    if 'id' in new_task_data:
+                        del new_task_data['id']
+                    
+                    # Xóa task cũ
+                    if not self.delete_task(task_id):
+                        print(f"Error deleting old task when converting to script")
+                        return False
+                    
+                    # Tạo task mới
+                    new_task_id = self.add_task(new_task_data)
+                    if new_task_id <= 0:
+                        print(f"Error creating new task when converting to script")
+                        return False
+                    
+                    # Khôi phục các dependencies nếu có
+                    if 'dependencies' in current_task and current_task['dependencies']:
+                        for dep_id in current_task['dependencies']:
+                            if not self.add_dependency(new_task_id, dep_id):
+                                print(f"Warning: Failed to add dependency {dep_id} to new task {new_task_id}")
+                    
+                    # Khôi phục dependency behavior nếu có
+                    if 'dep_behavior' in current_task and current_task['dep_behavior'] != 0:
+                        if not self.set_dependency_behavior(new_task_id, current_task['dep_behavior']):
+                            print(f"Warning: Failed to set dependency behavior for new task {new_task_id}")
+                    
+                    # Khôi phục trạng thái enabled nếu task đã bị tắt
+                    if not current_task.get('enabled', True):
+                        self._run_command(f"disable {new_task_id}")
+                    
+                    print(f"Đã chuyển đổi task {task_id} thành task mới với ID {new_task_id}")
+                    return True
+                else:
+                    # Cùng là script mode, chỉ cập nhật nội dung
+                    # Chuẩn hóa nội dung script
+                    normalized_content = script_content.replace('\r\n', '\n')
+                    if not normalized_content.strip().startswith('#!/'):
+                        normalized_content = '#!/bin/bash\n' + normalized_content
+                    
+                    # Tạo file script tạm
                     import tempfile
                     
                     # Tạo thư mục scripts trong bin nếu chưa tồn tại
@@ -845,106 +877,139 @@ class TaskAPI:
                     fd, temp_path = tempfile.mkstemp(suffix='.sh', prefix='script_', dir=script_dir)
                     
                     try:
-                        # Chuẩn hóa nội dung script
-                        # Chuyển đổi các CRLF (Windows) thành LF (Unix) 
-                        normalized_content = script_content.replace('\r\n', '\n')
-                        
-                        # Xử lý shebang nếu chưa có
-                        if not normalized_content.strip().startswith('#!/'):
-                            normalized_content = '#!/bin/bash\n' + normalized_content
-                        
                         # Ghi nội dung đã chuẩn hóa vào file
                         with os.fdopen(fd, 'w') as f:
                             f.write(normalized_content)
                         
-                        # Cấp quyền thực thi cho file (0777 cho phép tất cả người dùng thực thi)
+                        # Cấp quyền thực thi cho file
                         os.chmod(temp_path, 0o777)
                         
-                        print(f"Created script file with full permissions (0777): {temp_path}")
+                        # Sử dụng lệnh edit với trường script
+                        edit_cmd = f'edit {task_id} script "{temp_path}"'
+                        exit_code, output = self._run_command(edit_cmd)
                         
-                        # Thêm đường dẫn file vào lệnh
-                        cmd_parts.append('-f')
-                        cmd_parts.append(f'"{temp_path}"')
-                        
-                        print(f"Created script file from content: {temp_path}")
+                        if exit_code != 0:
+                            print(f"Error updating script content: {output}")
+                            success = False
+                        else:
+                            print(f"Successfully updated script content for task {task_id}")
                     except Exception as e:
-                        print(f"Error creating script file: {e}")
-                        # Quay lại sử dụng lệnh trực tiếp
-                        cmd_parts.append(f'"echo Error creating script: {str(e)}"')
-                        exec_mode = 0
+                        print(f"Error creating temporary script file: {e}")
+                        success = False
+        
+        elif exec_mode == 2:  # Chế độ AI dynamic
+            # Xử lý chế độ AI dynamic
+            if 'ai_prompt' in task_data and 'system_metrics' in task_data:
+                # Nếu đang chuyển từ chế độ khác sang AI dynamic, cần dùng cách tạo mới
+                if current_task.get('exec_mode', 0) != 2:
+                    print("Chuyển sang chế độ AI dynamic - tạo lại task")
                     
+                    # Lưu lại tất cả thông tin task hiện tại
+                    new_task_data = current_task.copy()
+                    
+                    # Cập nhật với thông tin mới
+                    new_task_data.update(task_data)
+                    
+                    # Đảm bảo exec_mode là AI dynamic
+                    new_task_data['exec_mode'] = 2
+                    
+                    # Xóa ID để tránh xung đột khi tạo mới
+                    if 'id' in new_task_data:
+                        del new_task_data['id']
+                    
+                    # Xóa task cũ
+                    if not self.delete_task(task_id):
+                        print(f"Error deleting old task when converting to AI dynamic")
+                        return False
+                    
+                    # Tạo task mới
+                    new_task_id = self.add_task(new_task_data)
+                    if new_task_id <= 0:
+                        print(f"Error creating new task when converting to AI dynamic")
+                        return False
+                    
+                    # Chuyển đổi task mới thành AI dynamic
+                    ai_prompt = task_data['ai_prompt']
+                    system_metrics = task_data['system_metrics']
+                    if not self.convert_task_to_ai_dynamic(new_task_id, ai_prompt, system_metrics):
+                        print(f"Error converting new task to AI dynamic mode")
+                        # Không return False ở đây vì task đã được tạo thành công
+                    
+                    # Khôi phục các dependencies nếu có
+                    if 'dependencies' in current_task and current_task['dependencies']:
+                        for dep_id in current_task['dependencies']:
+                            if not self.add_dependency(new_task_id, dep_id):
+                                print(f"Warning: Failed to add dependency {dep_id} to new task {new_task_id}")
+                    
+                    # Khôi phục dependency behavior nếu có
+                    if 'dep_behavior' in current_task and current_task['dep_behavior'] != 0:
+                        if not self.set_dependency_behavior(new_task_id, current_task['dep_behavior']):
+                            print(f"Warning: Failed to set dependency behavior for new task {new_task_id}")
+                    
+                    # Khôi phục trạng thái enabled nếu task đã bị tắt
+                    if not current_task.get('enabled', True):
+                        self._run_command(f"disable {new_task_id}")
+                    
+                    print(f"Đã chuyển đổi task {task_id} thành task AI dynamic mới với ID {new_task_id}")
+                    return True
                 else:
-                    # Nếu nội dung trống, quay lại sử dụng lệnh trực tiếp
-                    cmd_parts.append('"echo Hello World"')
-                    exec_mode = 0
+                    # Đã là chế độ AI dynamic, chỉ cập nhật thông tin
+                    ai_prompt = task_data['ai_prompt'].replace('"', '\\"')
+                    system_metrics = task_data['system_metrics'].replace('"', '\\"')
+                    convert_cmd = f'to-ai {task_id} "{ai_prompt}" "{system_metrics}"'
+                    exit_code, output = self._run_command(convert_cmd)
+                    
+                    if exit_code != 0:
+                        print(f"Error updating AI dynamic mode: {output}")
+                        success = False
         
-        # Thêm các tùy chọn
-        # Nếu có khoảng thời gian (interval)
-        if task_data.get('schedule_type') == 1 and task_data.get('interval'):
-            # Chuyển đổi từ giây sang phút (backend chấp nhận phút)
-            minutes = max(1, int(task_data.get('interval', 0) / 60))
-            cmd_parts.append(f"-t {minutes}")
+        # Cập nhật lịch trình
+        schedule_type = task_data.get('schedule_type', current_task.get('schedule_type', 0))
         
-        # Nếu có biểu thức cron
-        elif task_data.get('schedule_type') == 2 and task_data.get('cron_expression'):
-            cron = task_data.get('cron_expression', '').replace('"', '\\"')
-            cmd_parts.append(f'-s "{cron}"')
+        if schedule_type == 1 and 'interval' in task_data:  # Interval scheduling
+            interval_minutes = max(1, int(task_data.get('interval', 0) / 60))  # Convert seconds to minutes
+            if interval_minutes != int(current_task.get('interval', 0) / 60):
+                edit_cmd = f'edit {task_id} interval {interval_minutes}'
+                exit_code, output = self._run_command(edit_cmd)
+                if exit_code != 0:
+                    print(f"Error updating interval: {output}")
+                    success = False
         
-        # Thêm thư mục làm việc nếu có
-        if task_data.get('working_dir'):
-            working_dir = task_data.get('working_dir', '').replace('"', '\\"')
-            cmd_parts.append(f'-d "{working_dir}"')
+        elif schedule_type == 2 and 'cron_expression' in task_data:  # Cron scheduling
+            if task_data['cron_expression'] != current_task.get('cron_expression', ''):
+                cron = task_data['cron_expression'].replace('"', '\\"')
+                edit_cmd = f'edit {task_id} cron "{cron}"'
+                exit_code, output = self._run_command(edit_cmd)
+                if exit_code != 0:
+                    print(f"Error updating cron expression: {output}")
+                    success = False
         
-        # Thêm thời gian chạy tối đa nếu có
-        if task_data.get('max_runtime'):
-            cmd_parts.append(f"-m {task_data.get('max_runtime')}")
+        # Cập nhật thời gian chạy tối đa
+        if 'max_runtime' in task_data and task_data['max_runtime'] != current_task.get('max_runtime', 0):
+            edit_cmd = f'edit {task_id} runtime {task_data["max_runtime"]}'
+            exit_code, output = self._run_command(edit_cmd)
+            if exit_code != 0:
+                print(f"Error updating max runtime: {output}")
+                success = False
         
-        # Kết hợp các phần tạo thành lệnh hoàn chỉnh
-        command = ' '.join(cmd_parts)
+        # Cập nhật thư mục làm việc
+        if 'working_dir' in task_data and task_data['working_dir'] != current_task.get('working_dir', ''):
+            working_dir = task_data['working_dir'].replace('"', '\\"')
+            edit_cmd = f'edit {task_id} dir "{working_dir}"'
+            exit_code, output = self._run_command(edit_cmd)
+            if exit_code != 0:
+                print(f"Error updating working directory: {output}")
+                success = False
         
-        # Thực thi lệnh
-        print(f"Sending update command: {command}")
-        add_exit_code, output = self._run_command(command)
-        if add_exit_code != 0:
-            print(f"Error adding updated task: {output}")
-            return False
+        # Cập nhật hành vi phụ thuộc
+        if 'dep_behavior' in task_data and task_data['dep_behavior'] != current_task.get('dep_behavior', 0):
+            edit_cmd = f'edit {task_id} dep_behavior {task_data["dep_behavior"]}'
+            exit_code, output = self._run_command(edit_cmd)
+            if exit_code != 0:
+                print(f"Error updating dependency behavior: {output}")
+                success = False
         
-        # Phân tích output để lấy ID tác vụ mới
-        id_match = re.search(r"Task added with ID: (\d+)", output)
-        if id_match:
-            new_task_id = int(id_match.group(1))
-            
-            # Cập nhật trạng thái của tác vụ nếu cần
-            if 'enabled' in task_data and not task_data['enabled']:
-                self._run_command(f"disable {new_task_id}")
-            
-            # Nếu last_run_time có tồn tại, áp dụng lại giá trị này vào task mới
-            if last_run_time > 0:
-                # In thông báo log
-                print(f"Preserving last_run_time {last_run_time} for task {new_task_id}")
-                
-                # Sử dụng SQLite trực tiếp để cập nhật giá trị last_run_time và exit_code
-                try:
-                    import sqlite3
-                    db_path = os.path.join(self.data_dir, "tasks.db")
-                    if os.path.exists(db_path):
-                        conn = sqlite3.connect(db_path)
-                        cursor = conn.cursor()
-                        cursor.execute("UPDATE tasks SET last_run_time = ?, exit_code = ? WHERE id = ?", 
-                                      (last_run_time, exit_code_value, new_task_id))
-                        conn.commit()
-                        conn.close()
-                        print(f"Successfully updated historical data in database for task {new_task_id}")
-                except Exception as e:
-                    print(f"Error updating historical data in database: {e}")
-            
-            # Phần thêm phụ thuộc sẽ được xử lý riêng bởi phương thức add_dependency
-            
-            print(f"Updated task {task_id} with new ID {new_task_id}")
-            return True
-        else:
-            print(f"Could not determine new task ID from output: {output}")
-            return False
+        return success
     
     def delete_task(self, task_id):
         """Xóa một tác vụ"""
