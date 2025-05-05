@@ -401,14 +401,44 @@ bool ai_save_default_config(const char *config_path) {
         }
     }
     
-    // Tạo JSON cấu hình
-    cJSON *root = cJSON_CreateObject();
+    // Đọc file cấu hình hiện tại nếu có
+    FILE *file = fopen(config_path, "r");
+    cJSON *root = NULL;
+    
+    if (file) {
+        // Đọc và phân tích JSON từ file
+        fseek(file, 0, SEEK_END);
+        long file_size = ftell(file);
+        fseek(file, 0, SEEK_SET);
+        
+        if (file_size > 0) {
+            char *buffer = (char *)malloc(file_size + 1);
+            if (buffer) {
+                size_t read_size = fread(buffer, 1, file_size, file);
+                if (read_size == (size_t)file_size) {
+                    buffer[file_size] = '\0';
+                    root = cJSON_Parse(buffer);
+                }
+                free(buffer);
+            }
+        }
+        fclose(file);
+    }
+    
+    // Tạo JSON cấu hình mới nếu không đọc được
+    if (!root) {
+        root = cJSON_CreateObject();
+    }
+    
     if (!root) {
         log_message(LOG_ERROR, "Failed to create JSON object for config");
         return false;
     }
     
-    cJSON_AddStringToObject(root, "api_key", "YOUR_API_KEY_HERE");
+    // Chỉ thêm api_key nếu chưa có
+    if (!cJSON_GetObjectItem(root, "api_key")) {
+        cJSON_AddStringToObject(root, "api_key", "YOUR_API_KEY_HERE");
+    }
     
     char *json_str = cJSON_Print(root);
     cJSON_Delete(root);
@@ -419,7 +449,7 @@ bool ai_save_default_config(const char *config_path) {
     }
     
     // Ghi file
-    FILE *file = fopen(config_path, "w");
+    file = fopen(config_path, "w");
     if (!file) {
         log_message(LOG_ERROR, "Failed to create config file: %s (%s)", config_path, strerror(errno));
         free(json_str);
@@ -497,13 +527,42 @@ bool ai_update_api_key(const char *api_key, const char *config_path) {
         ai_load_config(config_path);
     }
     
-    // Tạo JSON cấu hình
-    cJSON *root = cJSON_CreateObject();
+    // Đọc file cấu hình hiện tại để không mất dữ liệu khác (như email)
+    FILE *file = fopen(config_path, "r");
+    cJSON *root = NULL;
+    
+    if (file) {
+        // Đọc và phân tích JSON từ file
+        fseek(file, 0, SEEK_END);
+        long file_size = ftell(file);
+        fseek(file, 0, SEEK_SET);
+        
+        if (file_size > 0) {
+            char *buffer = (char *)malloc(file_size + 1);
+            if (buffer) {
+                size_t read_size = fread(buffer, 1, file_size, file);
+                if (read_size == (size_t)file_size) {
+                    buffer[file_size] = '\0';
+                    root = cJSON_Parse(buffer);
+                }
+                free(buffer);
+            }
+        }
+        fclose(file);
+    }
+    
+    // Nếu không đọc được hoặc không tìm thấy file, tạo đối tượng JSON mới
+    if (!root) {
+        root = cJSON_CreateObject();
+    }
+    
     if (!root) {
         log_message(LOG_ERROR, "Failed to create JSON object for config");
         return false;
     }
     
+    // Cập nhật hoặc thêm API key vào cấu hình
+    cJSON_DeleteItemFromObject(root, "api_key");
     cJSON_AddStringToObject(root, "api_key", ai_config.api_key);
     
     char *json_str = cJSON_Print(root);
@@ -515,7 +574,7 @@ bool ai_update_api_key(const char *api_key, const char *config_path) {
     }
     
     // Ghi file
-    FILE *file = fopen(config_path, "w");
+    file = fopen(config_path, "w");
     if (!file) {
         log_message(LOG_ERROR, "Failed to open config file for writing: %s (%s)", config_path, strerror(errno));
         free(json_str);
