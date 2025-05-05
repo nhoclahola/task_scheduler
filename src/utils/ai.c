@@ -77,7 +77,14 @@ char* ai_call_deepseek_api(const char *api_key, const char *system_state_json, c
                           "You will be provided with system metrics and a task goal. Your job is to generate a single valid "
                           "shell command or a small script that addresses the goal based on the current system state. "
                           "Only output the exact command to run, nothing else - no explanations, no markdown formatting, "
-                          "just the raw command or script to execute.");
+                          "just the raw command or script to execute. "
+                          "IMPORTANT NOTIFICATION GUIDELINES: "
+                          "- When the user asks for ANY type of notification, generate a simple notify-send command "
+                          "- Format notifications as: \"notify-send 'Title' 'Message'\" "
+                          "- Do NOT include command checks like 'command -v notify-send' in your output "
+                          "- For task monitoring, CPU metrics, disk space, or any alert, use notify-send "
+                          "- The system will automatically handle cases where notify-send is not available "
+                          "Make the command simple, specific, and focused on the task goal.");
     cJSON_AddItemToArray(messages, system_msg);
     
     // User message with system state
@@ -432,6 +439,47 @@ bool ai_save_default_config(const char *config_path) {
     return true;
 }
 
+/**
+ * @brief Tạo script wrapper cho notify-send
+ * 
+ * Hàm này tạo một script nhỏ để bọc notify-send, kiểm tra xem lệnh có tồn tại không
+ * và sử dụng echo làm phương án dự phòng nếu không có notify-send
+ * 
+ * @param buffer Buffer để lưu script
+ * @param buffer_size Kích thước buffer
+ * @param title Tiêu đề thông báo
+ * @param message Nội dung thông báo
+ * @return true nếu thành công, false nếu thất bại
+ */
+bool ai_create_notify_wrapper(char *buffer, size_t buffer_size, 
+                            const char *title, const char *message) {
+    if (!buffer || buffer_size == 0 || !title || !message) {
+        log_message(LOG_ERROR, "Invalid parameters for notification wrapper");
+        return false;
+    }
+    
+    // Tạo script kiểm tra notify-send và sử dụng phương án dự phòng nếu cần
+    int written = snprintf(buffer, buffer_size,
+        "#!/bin/bash\n\n"
+        "TITLE=\"%s\"\n"
+        "MESSAGE=\"%s\"\n\n"
+        "# Kiểm tra xem notify-send có tồn tại không\n"
+        "if command -v notify-send >/dev/null 2>&1; then\n"
+        "    notify-send \"$TITLE\" \"$MESSAGE\"\n"
+        "else\n"
+        "    # Phương án dự phòng: sử dụng echo và ghi vào tệp log\n"
+        "    echo \"$TITLE: $MESSAGE\" | tee -a \"$HOME/task_notification.log\"\n"
+        "fi\n",
+        title, message);
+    
+    if (written < 0 || (size_t)written >= buffer_size) {
+        log_message(LOG_ERROR, "Buffer is too small for notification script");
+        return false;
+    }
+    
+    return true;
+}
+
 bool ai_update_api_key(const char *api_key, const char *config_path) {
     if (!api_key) {
         return false;
@@ -590,9 +638,13 @@ bool ai_generate_shell_solution(const char *description, bool *is_script,
         "2. Một shell script đầy đủ cho các nhiệm vụ phức tạp hơn.\n\n"
         "Hãy phân tích yêu cầu và quyết định xem nên tạo lệnh đơn giản hay script đầy đủ.\n"
         "Nếu tạo script, hãy bắt đầu bằng dòng #!/bin/bash hoặc shebang thích hợp và bao gồm xử lý lỗi.\n"
-        "Ưu tiên các công cụ phổ biến như df, du, free, notify-send, v.v.\n"
+        "Ưu tiên các công cụ phổ biến như df, du, free, echo, printf, v.v.\n"
         "KHÔNG bao gồm giải thích, chỉ cung cấp lệnh shell hoặc shell script hoàn chỉnh.\n"
-        "Nếu yêu cầu cần gửi thông báo, hãy ưu tiên sử dụng notify-send.\n"
+        "Đối với thông báo, hãy sử dụng các cách sau theo thứ tự ưu tiên:\n"
+        "1. Xuất thông báo ra stdout/stderr với echo hoặc printf, hoặc ghi thông báo vào file log\n"
+        "2. Sử dụng echo để hiển thị trong terminal\n"
+        "3. Chỉ sử dụng notify-send khi yêu cầu đặc biệt chỉ định cần desktop notification\n"
+        "Hãy luôn kiểm tra xem lệnh tồn tại trước khi sử dụng (ví dụ: kiểm tra notify-send với command -v notify-send).\n"
         "Không sử dụng đường dẫn tuyệt đối không cần thiết. Viết code đầy đủ, không rút gọn.";
     
     // Gọi API DeepSeek để tạo shell command/script
@@ -680,7 +732,11 @@ bool ai_generate_complete_task(const char *description, AIGeneratedTask *result)
         "- If the task is simple, use a single command (is_script: false)\n"
         "- If the task is complex, use a complete shell script with shebang (is_script: true)\n"
         "- For scripts, include proper error handling and use best practices\n"
-        "- Prefer standard Linux tools like df, du, free, notify-send, etc.\n\n"
+        "- Prefer standard Linux tools like df, du, free, echo, printf, etc.\n"
+        "- For notifications, prefer these methods in order:\n"
+        "  1. Output to stdout/stderr with echo or printf, or write to a log file\n"
+        "  2. Use echo for terminal display\n"
+        "  3. Only use notify-send when specifically requested and check if it exists first (command -v notify-send)\n\n"
         
         "For scheduling:\n"
         "- If the task needs a specific time/day pattern, use a cron expression (is_cron: true)\n"

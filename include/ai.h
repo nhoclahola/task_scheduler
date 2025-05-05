@@ -135,4 +135,19 @@ bool ai_analyze_schedule(const char *description, AIScheduleAnalysis *result);
  */
 bool ai_generate_complete_task(const char *description, AIGeneratedTask *result);
 
+/**
+ * Tạo script wrapper cho notify-send
+ * 
+ * Hàm này tạo một script nhỏ để bọc notify-send, kiểm tra xem lệnh có tồn tại không
+ * và sử dụng echo làm phương án dự phòng nếu không có notify-send
+ * 
+ * @param buffer Buffer để lưu script
+ * @param buffer_size Kích thước buffer
+ * @param title Tiêu đề thông báo
+ * @param message Nội dung thông báo
+ * @return true nếu thành công, false nếu thất bại
+ */
+bool ai_create_notify_wrapper(char *buffer, size_t buffer_size, 
+                            const char *title, const char *message);
+
 #endif /* AI_H */ 

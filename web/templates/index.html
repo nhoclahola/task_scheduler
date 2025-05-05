@@ -24,11 +24,12 @@
                 <thead class="table-light sticky-top">
                     <tr>
                         <th scope="col" width="50">ID</th>
-                        <th scope="col" width="25%">Tên tác vụ</th>
+                        <th scope="col" width="20%">Tên tác vụ</th>
+                        <th scope="col" width="10%">Loại</th>
                         <th scope="col" width="12%">Lịch trình</th>
                         <th scope="col" width="10%">Trạng thái</th>
-                        <th scope="col" width="17%">Lần chạy cuối</th>
-                        <th scope="col" width="17%">Lần chạy tiếp theo</th>
+                        <th scope="col" width="15%">Lần chạy cuối</th>
+                        <th scope="col" width="15%">Lần chạy tiếp theo</th>
                         <th scope="col" width="12%" class="actions-cell">Thao tác</th>
                     </tr>
                 </thead>
@@ -42,8 +43,25 @@
                                     {{ task.name }}
                                 </a>
                                 <div class="small text-muted text-truncate">
-                                    {{ task.command }}
+                                    {% if task.exec_mode == 0 %}
+                                        {{ task.command }}
+                                    {% elif task.exec_mode == 1 %}
+                                        <i class="fas fa-file-code me-1"></i>Script
+                                    {% elif task.exec_mode == 2 %}
+                                        <i class="fas fa-robot me-1"></i>{{ task.ai_prompt|default('AI Dynamic', true) }}
+                                    {% endif %}
                                 </div>
+                            </td>
+                            <td>
+                                {% if task.exec_mode == 0 %}
+                                    <span class="badge bg-secondary">Lệnh</span>
+                                {% elif task.exec_mode == 1 %}
+                                    <span class="badge bg-warning text-dark">Script</span>
+                                {% elif task.exec_mode == 2 %}
+                                    <span class="badge bg-info">
+                                        <i class="fas fa-robot me-1"></i>AI Dynamic
+                                    </span>
+                                {% endif %}
                             </td>
                             <td>
                                 {% if task.schedule_type == 0 %}
@@ -130,13 +148,18 @@
                         {% endfor %}
                     {% else %}
                         <tr class="empty-state-row">
-                            <td colspan="7" class="text-center py-5">
+                            <td colspan="8" class="text-center py-5">
                                 <i class="fas fa-tasks fa-4x text-muted mb-3"></i>
                                 <h5>Chưa có tác vụ nào</h5>
                                 <p class="text-muted">Bắt đầu bằng cách thêm một tác vụ mới</p>
-                                <a href="{{ url_for('new_task') }}" class="btn btn-primary mt-2">
-                                    <i class="fas fa-plus me-1"></i>Thêm tác vụ mới
-                                </a>
+                                <div>
+                                    <a href="{{ url_for('new_task') }}" class="btn btn-primary mt-2 me-2">
+                                        <i class="fas fa-plus me-1"></i>Thêm tác vụ mới
+                                    </a>
+                                    <a href="{{ url_for('ai_create_task_form') }}" class="btn btn-info mt-2">
+                                        <i class="fas fa-robot me-1"></i>Tạo tác vụ với AI
+                                    </a>
+                                </div>
                             </td>
                         </tr>
                     {% endif %}

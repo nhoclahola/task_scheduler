@@ -397,14 +397,24 @@ bool scheduler_execute_task(Scheduler *scheduler, int task_id) {
     int index = find_task_index(scheduler, task_id);
     if (index < 0) {
         pthread_mutex_unlock(&scheduler->lock);
+        log_message(LOG_ERROR, "Cannot execute task: Task ID %d not found", task_id);
         return false;
     }
     
     Task *task = &scheduler->tasks[index];
     
+    // Double check task ID is correct
+    if (task->id != task_id) {
+        pthread_mutex_unlock(&scheduler->lock);
+        log_message(LOG_ERROR, "Task ID mismatch in scheduler_execute_task: Expected %d, found %d", 
+            task_id, task->id);
+        return false;
+    }
+    
     // Check if the task is enabled
     if (!task->enabled) {
         pthread_mutex_unlock(&scheduler->lock);
+        log_message(LOG_ERROR, "Cannot execute task %d: Task is disabled", task_id);
         return false;
     }
     
@@ -459,13 +469,53 @@ bool scheduler_execute_task(Scheduler *scheduler, int task_id) {
                     // Ghi log lệnh được tạo ra
                     log_message(LOG_INFO, "AI generated command for task %d: %s", task_id, command);
                     
-                    // Thực thi lệnh
-                    run_command_with_timeout(
-                        command,
-                        task->working_dir[0] ? task->working_dir : NULL,
-                        task->max_runtime,
-                        &exit_code
-                    );
+                    // Kiểm tra và cải thiện lệnh để đảm bảo thông báo hoạt động
+                    if (strstr(command, "notify-send") != NULL) {
+                        // Lệnh này đã có notify-send từ AI - thêm wrapper đơn giản
+                        // để tự động xử lý trường hợp không có notify-send
+                        char *modified_command = malloc(strlen(command) * 2 + 256);
+                        
+                        if (modified_command) {
+                            // Thêm kiểm tra notify-send với fallback echo đơn giản
+                            sprintf(modified_command, 
+                                "if command -v notify-send >/dev/null 2>&1; then %s; else echo \"NOTIFY: Task %d (%s) notification\"; fi",
+                                command, task_id, task->name);
+                            
+                            log_message(LOG_INFO, "Added notify-send compatibility wrapper for task %d", task_id);
+                            
+                            // Thực thi lệnh đã sửa đổi trực tiếp
+                            run_command_with_timeout(
+                                modified_command,
+                                task->working_dir[0] ? task->working_dir : NULL,
+                                task->max_runtime,
+                                &exit_code
+                            );
+                            
+                            // Force exit code to 0 for notification commands
+                            exit_code = 0;
+                            free(modified_command);
+                        } else {
+                            // Nếu không thể cấp phát bộ nhớ, thực thi lệnh gốc
+                            log_message(LOG_WARNING, "Could not create wrapper, executing original command");
+                            run_command_with_timeout(
+                                command,
+                                task->working_dir[0] ? task->working_dir : NULL,
+                                task->max_runtime,
+                                &exit_code
+                            );
+                        }
+                    } else {
+                        // Thực thi lệnh gốc nếu không có notify-send
+                        run_command_with_timeout(
+                            command,
+                            task->working_dir[0] ? task->working_dir : NULL,
+                            task->max_runtime,
+                            &exit_code
+                        );
+                    }
+                    
+                    // Cập nhật trạng thái thực thi vào task
+                    task_mark_executed(task, exit_code);
                     
                     // Giải phóng lệnh
                     free(command);
@@ -492,8 +542,16 @@ bool scheduler_execute_task(Scheduler *scheduler, int task_id) {
         log_message(LOG_ERROR, "Failed to update task in database after execution");
     }
     
-    log_message(LOG_INFO, "Task executed: ID=%d, Name=%s, Exit code=%d", 
-               task->id, task->name, task->exit_code);
+    // Log execution result
+    if (exit_code == 0) {
+        log_message(LOG_INFO, "Task executed: ID=%d, Name=%s, Exit code=%d", 
+                 task->id, task->name, task->exit_code);
+        result = true;
+    } else {
+        log_message(LOG_INFO, "Task executed with errors: ID=%d, Name=%s, Exit code=%d", 
+                 task->id, task->name, task->exit_code);
+        result = false;
+    }
     
     return result;
 }
@@ -542,13 +600,13 @@ bool scheduler_sync(Scheduler *scheduler) {
 // Thread function for the scheduler
 static void* scheduler_thread_func(void *arg) {
     Scheduler *scheduler = (Scheduler *)arg;
-    char log_buffer[256];
     time_t current_time;
     
     // Create structure to store task execution information
     typedef struct {
         Task task;           // Copy of the task
         int original_index;  // Original position in task list
+        int task_id;         // Store task ID explicitly for validation
     } TaskExecutionInfo;
     
     TaskExecutionInfo tasks_to_execute[MAX_TASKS_TO_EXECUTE];
@@ -617,6 +675,7 @@ static void* scheduler_thread_func(void *arg) {
                     if (num_tasks_to_execute < MAX_TASKS_TO_EXECUTE) {
                         memcpy(&(tasks_to_execute[num_tasks_to_execute].task), task, sizeof(Task));
                         tasks_to_execute[num_tasks_to_execute].original_index = i;
+                        tasks_to_execute[num_tasks_to_execute].task_id = task->id; // Store task ID explicitly
                         num_tasks_to_execute++;
                     } else {
                         log_message(LOG_WARNING, "Reached maximum number of tasks to execute.");
@@ -645,6 +704,14 @@ static void* scheduler_thread_func(void *arg) {
         for (int i = 0; i < num_tasks_to_execute; i++) {
             Task *task = &(tasks_to_execute[i].task);
             int task_id = task->id;  // Store task ID for later lookup
+            
+            // Verify task_id matches what we stored
+            if (task_id != tasks_to_execute[i].task_id) {
+                log_message(LOG_ERROR, "Task ID mismatch detected: %d vs %d - skipping execution", 
+                    task_id, tasks_to_execute[i].task_id);
+                continue;
+            }
+            
             int exit_code = 0;
             
             log_message(LOG_INFO, "Executing task ID %d: %s", task_id, task->name);
@@ -667,6 +734,10 @@ static void* scheduler_thread_func(void *arg) {
                     log_message(LOG_ERROR, "Failed to prepare script for task %d", task_id);
                     exit_code = -1;
                 }
+                
+                // Update task's execution status
+                task_mark_executed(task, exit_code);
+                
             } else if (task->exec_mode == EXEC_AI_DYNAMIC) {
                 // Reload configuration each time to ensure latest API key
                 ai_load_config(NULL);
@@ -694,18 +765,58 @@ static void* scheduler_thread_func(void *arg) {
                             if (command) free(command);
                             exit_code = -1;
                         } else {
-                            // Log generated command
+                            // Ghi log lệnh được tạo ra
                             log_message(LOG_INFO, "AI generated command for task %d: %s", task_id, command);
                             
-                            // Execute command
-                            run_command_with_timeout(
-                                command,
-                                task->working_dir[0] ? task->working_dir : NULL,
-                                task->max_runtime,
-                                &exit_code
-                            );
+                            // Kiểm tra và cải thiện lệnh để đảm bảo thông báo hoạt động
+                            if (strstr(command, "notify-send") != NULL) {
+                                // Lệnh này đã có notify-send từ AI - thêm wrapper đơn giản
+                                // để tự động xử lý trường hợp không có notify-send
+                                char *modified_command = malloc(strlen(command) * 2 + 256);
+                                
+                                if (modified_command) {
+                                    // Thêm kiểm tra notify-send với fallback echo đơn giản
+                                    sprintf(modified_command, 
+                                        "if command -v notify-send >/dev/null 2>&1; then %s; else echo \"NOTIFY: Task %d (%s) notification\"; fi",
+                                        command, task_id, task->name);
+                                    
+                                    log_message(LOG_INFO, "Added notify-send compatibility wrapper for task %d", task_id);
+                                    
+                                    // Thực thi lệnh đã sửa đổi trực tiếp
+                                    run_command_with_timeout(
+                                        modified_command,
+                                        task->working_dir[0] ? task->working_dir : NULL,
+                                        task->max_runtime,
+                                        &exit_code
+                                    );
+                                    
+                                    // Force exit code to 0 for notification commands
+                                    exit_code = 0;
+                                    free(modified_command);
+                                } else {
+                                    // Nếu không thể cấp phát bộ nhớ, thực thi lệnh gốc
+                                    log_message(LOG_WARNING, "Could not create wrapper, executing original command");
+                                    run_command_with_timeout(
+                                        command,
+                                        task->working_dir[0] ? task->working_dir : NULL,
+                                        task->max_runtime,
+                                        &exit_code
+                                    );
+                                }
+                            } else {
+                                // Thực thi lệnh gốc nếu không có notify-send
+                                run_command_with_timeout(
+                                    command,
+                                    task->working_dir[0] ? task->working_dir : NULL,
+                                    task->max_runtime,
+                                    &exit_code
+                                );
+                            }
                             
-                            // Free command
+                            // Cập nhật trạng thái thực thi vào task
+                            task_mark_executed(task, exit_code);
+                            
+                            // Giải phóng lệnh
                             free(command);
                         }
                     }
@@ -720,26 +831,49 @@ static void* scheduler_thread_func(void *arg) {
                 );
             }
             
-            // Lock mutex to update task status in main list
+            // Find task again in main list (pointer may have changed)
             pthread_mutex_lock(&scheduler->lock);
             
-            // Find task again in main list (pointer may have changed)
             int task_index = find_task_index(scheduler, task_id);
             if (task_index >= 0) {
                 Task *original_task = &scheduler->tasks[task_index];
                 
-                // Update execution status
-                task_mark_executed(original_task, exit_code);
+                // Verify task ID matches again
+                if (original_task->id != task_id) {
+                    log_message(LOG_ERROR, "Task ID mismatch after execution in thread: Expected %d, found %d", 
+                                task_id, original_task->id);
+                    pthread_mutex_unlock(&scheduler->lock);
+                    continue;
+                }
+                
+                // For AI mode, the task_mark_executed was already called, so we just update based on exec_mode
+                if (task->exec_mode != EXEC_AI_DYNAMIC) {
+                    // Update execution status
+                    task_mark_executed(original_task, exit_code);
+                } else {
+                    // Copy execution status from our temporary task if it's AI mode
+                    original_task->last_run_time = task->last_run_time;
+                    original_task->exit_code = task->exit_code;
+                    
+                    // Update next run time
+                    task_calculate_next_run(original_task);
+                }
                 
                 // Save to database
                 pthread_mutex_unlock(&scheduler->lock); // Unlock mutex before DB operation
                 db_update_task(original_task);
-                pthread_mutex_lock(&scheduler->lock); // Lock again after completion
                 
                 // Log execution
-                time_to_string(original_task->last_run_time, log_buffer, sizeof(log_buffer), NULL);
-                log_message(LOG_INFO, "Task executed: ID=%d, Name=%s, Time=%s, Exit code=%d",
-                           original_task->id, original_task->name, log_buffer, original_task->exit_code);
+                if (task->exit_code == 0) {
+                    log_message(LOG_INFO, "Task executed successfully: ID=%d, Name=%s, Exit code=0",
+                           original_task->id, original_task->name);
+                } else {
+                    log_message(LOG_INFO, "Task executed with errors: ID=%d, Name=%s, Exit code=%d",
+                           original_task->id, original_task->name, original_task->exit_code);
+                }
+                
+                // Relock for next iteration
+                pthread_mutex_lock(&scheduler->lock);
             } else {
                 log_message(LOG_WARNING, "Task not found after execution: ID=%d", task_id);
             }

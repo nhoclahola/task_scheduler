@@ -766,7 +766,7 @@ class TaskAPI:
         if not current_task:
             print(f"Error: Cannot find task {task_id} to update")
             return False
-        
+            
         # Sử dụng lệnh edit để cập nhật từng trường thay vì xóa và tạo lại
         success = True
         
@@ -926,8 +926,8 @@ class TaskAPI:
                     new_task_id = self.add_task(new_task_data)
                     if new_task_id <= 0:
                         print(f"Error creating new task when converting to AI dynamic")
-                        return False
-                    
+            return False
+        
                     # Chuyển đổi task mới thành AI dynamic
                     ai_prompt = task_data['ai_prompt']
                     system_metrics = task_data['system_metrics']
@@ -951,8 +951,8 @@ class TaskAPI:
                         self._run_command(f"disable {new_task_id}")
                     
                     print(f"Đã chuyển đổi task {task_id} thành task AI dynamic mới với ID {new_task_id}")
-                    return True
-                else:
+            return True
+        else:
                     # Đã là chế độ AI dynamic, chỉ cập nhật thông tin
                     ai_prompt = task_data['ai_prompt'].replace('"', '\\"')
                     system_metrics = task_data['system_metrics'].replace('"', '\\"')

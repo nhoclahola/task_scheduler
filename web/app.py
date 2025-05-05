@@ -66,6 +66,15 @@ def get_schedule_type_name(schedule_type):
     }
     return schedule_type_names.get(schedule_type, "Không xác định")
 
+def get_exec_mode_name(exec_mode):
+    """Chuyển đổi mã chế độ thực thi thành tên"""
+    exec_mode_names = {
+        0: "Lệnh",
+        1: "Script",
+        2: "AI Dynamic"
+    }
+    return exec_mode_names.get(exec_mode, "Không xác định")
+
 def get_dependency_behavior_name(behavior):
     """Chuyển đổi mã hành vi phụ thuộc thành tên"""
     behavior_names = {
@@ -98,6 +107,7 @@ def index():
         task['last_run_time_fmt'] = format_timestamp(task.get('last_run_time', 0))
         task['frequency_name'] = get_frequency_name(task.get('frequency', 0))
         task['schedule_type_name'] = get_schedule_type_name(task.get('schedule_type', 0))
+        task['exec_mode_name'] = get_exec_mode_name(task.get('exec_mode', 0))
     
     return render_template('index.html', tasks=tasks)
 
@@ -197,6 +207,7 @@ def view_task(task_id):
         task['schedule_type_name'] = get_schedule_type_name(task.get('schedule_type', 0))
         task['frequency_name'] = get_frequency_name(task.get('frequency', 0))
         task['dependency_behavior_name'] = get_dependency_behavior_name(task.get('dep_behavior', 0))
+        task['exec_mode_name'] = get_exec_mode_name(task.get('exec_mode', 0))
         
         # Xử lý mã kết quả exit_code
         exit_code = task.get('exit_code', -1)

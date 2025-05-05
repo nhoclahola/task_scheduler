@@ -62,7 +62,17 @@
                             </tr>
                             <tr>
                                 <th>Chế độ thực thi:</th>
-                                <td>{{ "Script" if task.exec_mode == 1 else "Lệnh" }}</td>
+                                <td>
+                                    {% if task.exec_mode == 0 %}
+                                        <span class="badge bg-secondary">Lệnh</span>
+                                    {% elif task.exec_mode == 1 %}
+                                        <span class="badge bg-warning text-dark">Script</span>
+                                    {% elif task.exec_mode == 2 %}
+                                        <span class="badge bg-info">
+                                            <i class="fas fa-robot me-1"></i>AI Dynamic
+                                        </span>
+                                    {% endif %}
+                                </td>
                             </tr>
                             <tr>
                                 <th>Lệnh:</th>
@@ -80,6 +90,16 @@
                                         <pre class="p-2 bg-light border rounded"><code>{{ task.script_content }}</code></pre>
                                     </div>
                                 </td>
+                            </tr>
+                            {% endif %}
+                            {% if task.exec_mode == 2 %}
+                            <tr>
+                                <th>Mục tiêu AI:</th>
+                                <td>{{ task.ai_prompt or "Không xác định" }}</td>
+                            </tr>
+                            <tr>
+                                <th>Thông số hệ thống:</th>
+                                <td>{{ task.system_metrics or "Không xác định" }}</td>
                             </tr>
                             {% endif %}
                             <tr>
