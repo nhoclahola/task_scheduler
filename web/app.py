@@ -464,13 +464,13 @@ def toggle_task(task_id):
 def stats():
     tasks = task_api.get_all_tasks()
     
-    # Tính toán các thống kê
+    # Tính toán các thống kê cơ bản
     total_tasks = len(tasks)
     enabled_tasks = sum(1 for task in tasks if task.get('enabled', False))
     scheduled_tasks = sum(1 for task in tasks if task.get('next_run_time', 0) > 0)
     completed_tasks = sum(1 for task in tasks if task.get('last_run_time', 0) > 0)
     
-    # Tính toán thống kê trạng thái
+    # Thống kê trạng thái thực thi
     tasks_by_status = {
         'success': sum(1 for task in tasks if task.get('exit_code', -1) == 0 and task.get('last_run_time', 0) > 0),
         'failed': sum(1 for task in tasks if task.get('exit_code', -1) != 0 and task.get('exit_code', -1) != -1),
@@ -490,6 +490,64 @@ def stats():
         if freq_name not in tasks_by_frequency:
             tasks_by_frequency[freq_name] = 0
     
+    # Thêm phân tích chi tiết
+    
+    # 1. Phân loại theo chế độ thực thi
+    tasks_by_exec_mode = {}
+    for task in tasks:
+        mode = task.get('exec_mode', 0)
+        mode_name = get_exec_mode_name(mode)
+        tasks_by_exec_mode[mode_name] = tasks_by_exec_mode.get(mode_name, 0) + 1
+    
+    # 2. Phân tích thống kê thời gian chạy
+    execution_history = []
+    execution_success_rate = []
+    current_time = time.time()
+    time_ranges = [1, 7, 30]  # 1 ngày, 7 ngày, 30 ngày
+    
+    for days in time_ranges:
+        time_threshold = current_time - (days * 24 * 60 * 60)
+        recent_tasks = [t for t in tasks if t.get('last_run_time', 0) > time_threshold]
+        
+        success_count = sum(1 for t in recent_tasks if t.get('exit_code', -1) == 0)
+        failed_count = sum(1 for t in recent_tasks if t.get('exit_code', -1) != 0 and t.get('exit_code', -1) != -1)
+        total_executed = success_count + failed_count
+        
+        execution_history.append({
+            'period': f'{days} ngày',
+            'success': success_count,
+            'failed': failed_count,
+            'total': total_executed
+        })
+        
+        # Tính tỷ lệ thành công
+        success_rate = 0 if total_executed == 0 else (success_count / total_executed) * 100
+        execution_success_rate.append({
+            'period': f'{days} ngày',
+            'rate': round(success_rate, 1)
+        })
+    
+    # 3. Phân tích loại lịch trình
+    tasks_by_schedule_type = {}
+    for task in tasks:
+        schedule_type = task.get('schedule_type', 0)
+        schedule_name = get_schedule_type_name(schedule_type)
+        tasks_by_schedule_type[schedule_name] = tasks_by_schedule_type.get(schedule_name, 0) + 1
+    
+    # 4. Dự báo lịch chạy sắp tới
+    upcoming_executions = []
+    now_time = time.time()
+    future_tasks = [t for t in tasks if t.get('enabled', False) and t.get('next_run_time', 0) > now_time]
+    future_tasks.sort(key=lambda x: x.get('next_run_time', 0))
+    
+    for task in future_tasks[:5]:  # Giới hạn 5 tác vụ sắp tới
+        upcoming_executions.append({
+            'id': task.get('id', 0),
+            'name': task.get('name', 'Unknown'),
+            'next_run_time': task.get('next_run_time', 0),
+            'next_run_time_fmt': format_timestamp(task.get('next_run_time', 0))
+        })
+    
     # Truyền tất cả biến cần thiết cho template
     return render_template('stats.html', 
                           total_tasks=total_tasks,
@@ -497,7 +555,12 @@ def stats():
                           scheduled_tasks=scheduled_tasks,
                           completed_tasks=completed_tasks,
                           tasks_by_status=tasks_by_status,
-                          tasks_by_frequency=tasks_by_frequency)
+                          tasks_by_frequency=tasks_by_frequency,
+                          tasks_by_exec_mode=tasks_by_exec_mode,
+                          tasks_by_schedule_type=tasks_by_schedule_type,
+                          execution_history=execution_history,
+                          execution_success_rate=execution_success_rate,
+                          upcoming_executions=upcoming_executions)
 
 # Hàm kiểm tra xem file có phần mở rộng được cho phép không
 def allowed_file(filename):

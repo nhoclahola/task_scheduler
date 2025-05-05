@@ -140,15 +140,94 @@
         </div>
         
         <!-- Biểu đồ và phân tích -->
-        <div class="card mt-4">
+        <div class="row">
+            <!-- Biểu đồ chế độ thực thi -->
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header bg-light">
+                        <h6 class="mb-0"><i class="fas fa-cogs me-2"></i>Chế độ thực thi</h6>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="execModeChart" height="180"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Biểu đồ kiểu lịch trình -->
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header bg-light">
+                        <h6 class="mb-0"><i class="fas fa-clock me-2"></i>Kiểu lịch trình</h6>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="scheduleTypeChart" height="180"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row">
+            <!-- Lịch sử thực thi -->
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header bg-light">
+                        <h6 class="mb-0"><i class="fas fa-history me-2"></i>Lịch sử thực thi</h6>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="executionHistoryChart" height="180"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Tỷ lệ thành công -->
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header bg-light">
+                        <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>Tỷ lệ thành công (%)</h6>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="successRateChart" height="180"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Danh sách tác vụ sắp chạy -->
+        <div class="card mt-2">
             <div class="card-header bg-light">
-                <h6 class="mb-0"><i class="fas fa-chart-pie me-2"></i>Phân tích</h6>
+                <h6 class="mb-0"><i class="fas fa-clock me-2"></i>Tác vụ sắp chạy</h6>
             </div>
             <div class="card-body">
-                <p class="text-muted text-center mb-0">
-                    <i class="fas fa-info-circle me-1"></i>
-                    Biểu đồ phân tích chi tiết sẽ có sẵn trong phiên bản tới
-                </p>
+                {% if upcoming_executions %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Tên tác vụ</th>
+                                <th>Thời gian chạy tiếp theo</th>
+                                <th>Thao tác</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for task in upcoming_executions %}
+                            <tr>
+                                <td>{{ task.id }}</td>
+                                <td>{{ task.name }}</td>
+                                <td>{{ task.next_run_time_fmt }}</td>
+                                <td>
+                                    <a href="{{ url_for('view_task', task_id=task.id) }}" class="btn btn-sm btn-info">
+                                        <i class="fas fa-eye"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-center text-muted mb-0">Không có tác vụ nào sắp chạy</p>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -164,7 +243,171 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
 <script>
-    // Sẽ thêm JS cho các biểu đồ trong tương lai
+    // Dữ liệu cho biểu đồ
+    const execModeData = {
+        labels: [{% for mode, count in tasks_by_exec_mode.items() %}'{{ mode }}',{% endfor %}],
+        datasets: [{
+            label: 'Chế độ thực thi',
+            data: [{% for mode, count in tasks_by_exec_mode.items() %}{{ count }},{% endfor %}],
+            backgroundColor: [
+                'rgba(54, 162, 235, 0.6)',
+                'rgba(255, 206, 86, 0.6)',
+                'rgba(75, 192, 192, 0.6)'
+            ],
+            borderColor: [
+                'rgba(54, 162, 235, 1)',
+                'rgba(255, 206, 86, 1)',
+                'rgba(75, 192, 192, 1)'
+            ],
+            borderWidth: 1
+        }]
+    };
+    
+    const scheduleTypeData = {
+        labels: [{% for type, count in tasks_by_schedule_type.items() %}'{{ type }}',{% endfor %}],
+        datasets: [{
+            label: 'Kiểu lịch trình',
+            data: [{% for type, count in tasks_by_schedule_type.items() %}{{ count }},{% endfor %}],
+            backgroundColor: [
+                'rgba(255, 99, 132, 0.6)',
+                'rgba(54, 162, 235, 0.6)',
+                'rgba(255, 206, 86, 0.6)'
+            ],
+            borderColor: [
+                'rgba(255, 99, 132, 1)',
+                'rgba(54, 162, 235, 1)',
+                'rgba(255, 206, 86, 1)'
+            ],
+            borderWidth: 1
+        }]
+    };
+    
+    const executionHistoryData = {
+        labels: [{% for item in execution_history %}'{{ item.period }}',{% endfor %}],
+        datasets: [
+            {
+                label: 'Thành công',
+                data: [{% for item in execution_history %}{{ item.success }},{% endfor %}],
+                backgroundColor: 'rgba(40, 167, 69, 0.6)',
+                borderColor: 'rgba(40, 167, 69, 1)',
+                borderWidth: 1
+            },
+            {
+                label: 'Thất bại',
+                data: [{% for item in execution_history %}{{ item.failed }},{% endfor %}],
+                backgroundColor: 'rgba(220, 53, 69, 0.6)',
+                borderColor: 'rgba(220, 53, 69, 1)',
+                borderWidth: 1
+            }
+        ]
+    };
+    
+    const successRateData = {
+        labels: [{% for item in execution_success_rate %}'{{ item.period }}',{% endfor %}],
+        datasets: [{
+            label: 'Tỷ lệ thành công (%)',
+            data: [{% for item in execution_success_rate %}{{ item.rate }},{% endfor %}],
+            backgroundColor: 'rgba(40, 167, 69, 0.2)',
+            borderColor: 'rgba(40, 167, 69, 1)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.1
+        }]
+    };
+    
+    // Khởi tạo các biểu đồ
+    document.addEventListener('DOMContentLoaded', function() {
+        // Biểu đồ chế độ thực thi
+        const execModeCtx = document.getElementById('execModeChart').getContext('2d');
+        new Chart(execModeCtx, {
+            type: 'doughnut',
+            data: execModeData,
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                    },
+                    title: {
+                        display: true,
+                        text: 'Phân loại theo chế độ thực thi'
+                    }
+                }
+            }
+        });
+        
+        // Biểu đồ kiểu lịch trình
+        const scheduleTypeCtx = document.getElementById('scheduleTypeChart').getContext('2d');
+        new Chart(scheduleTypeCtx, {
+            type: 'pie',
+            data: scheduleTypeData,
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                    },
+                    title: {
+                        display: true,
+                        text: 'Phân loại theo kiểu lịch trình'
+                    }
+                }
+            }
+        });
+        
+        // Biểu đồ lịch sử thực thi
+        const executionHistoryCtx = document.getElementById('executionHistoryChart').getContext('2d');
+        new Chart(executionHistoryCtx, {
+            type: 'bar',
+            data: executionHistoryData,
+            options: {
+                responsive: true,
+                scales: {
+                    x: {
+                        stacked: true,
+                    },
+                    y: {
+                        stacked: true,
+                        beginAtZero: true
+                    }
+                },
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Thống kê thực thi theo thời gian'
+                    }
+                }
+            }
+        });
+        
+        // Biểu đồ tỷ lệ thành công
+        const successRateCtx = document.getElementById('successRateChart').getContext('2d');
+        new Chart(successRateCtx, {
+            type: 'line',
+            data: successRateData,
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {
+                            callback: function(value) {
+                                return value + '%';
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Tỷ lệ thành công theo thời gian'
+                    }
+                }
+            }
+        });
+    });
 </script>
 {% endblock %} 
