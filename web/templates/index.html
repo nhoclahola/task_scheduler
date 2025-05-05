@@ -3,6 +3,52 @@
 {% block title %}Task Scheduler - Quản lý tác vụ{% endblock %}
 
 {% block content %}
+<style>
+    .task-table-container {
+        overflow-x: auto;
+    }
+    .card {
+        width: 100%;
+        margin: 0 auto;
+    }
+    .table {
+        width: 100%;
+        table-layout: fixed;
+    }
+    .table td {
+        vertical-align: middle;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        padding: 0.5rem;
+    }
+    .table th {
+        padding: 0.75rem 0.5rem;
+    }
+    .table td .text-muted {
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: block;
+    }
+    .actions-cell {
+        text-align: center;
+    }
+    .dropdown-menu-end {
+        right: 0;
+        left: auto;
+    }
+    .task-name-cell {
+        max-width: 200px;
+    }
+    .badge {
+        white-space: nowrap;
+    }
+    .action-buttons {
+        display: flex;
+        justify-content: center;
+    }
+</style>
+
 <div class="card shadow">
     <div class="card-header bg-light d-flex justify-content-between align-items-center">
         <h5 class="card-title mb-0">Danh sách tác vụ</h5>
@@ -23,14 +69,14 @@
             <table class="table table-striped table-hover mb-0">
                 <thead class="table-light sticky-top">
                     <tr>
-                        <th scope="col" width="50">ID</th>
-                        <th scope="col" width="20%">Tên tác vụ</th>
-                        <th scope="col" width="10%">Loại</th>
-                        <th scope="col" width="12%">Lịch trình</th>
-                        <th scope="col" width="10%">Trạng thái</th>
-                        <th scope="col" width="15%">Lần chạy cuối</th>
-                        <th scope="col" width="15%">Lần chạy tiếp theo</th>
-                        <th scope="col" width="12%" class="actions-cell">Thao tác</th>
+                        <th width="5%">ID</th>
+                        <th width="25%">Tên tác vụ</th>
+                        <th width="8%">Loại</th>
+                        <th width="12%">Lịch trình</th>
+                        <th width="10%">Trạng thái</th>
+                        <th width="15%">Lần chạy cuối</th>
+                        <th width="15%">Lần chạy tiếp</th>
+                        <th width="10%">Thao tác</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -38,17 +84,17 @@
                         {% for task in tasks %}
                         <tr>
                             <td>{{ task.id }}</td>
-                            <td>
-                                <a href="{{ url_for('view_task', task_id=task.id) }}" class="text-decoration-none fw-medium">
+                            <td class="task-name-cell">
+                                <a href="{{ url_for('view_task', task_id=task.id) }}" class="text-decoration-none fw-medium d-block text-truncate">
                                     {{ task.name }}
                                 </a>
                                 <div class="small text-muted text-truncate">
                                     {% if task.exec_mode == 0 %}
-                                        {{ task.command }}
+                                        {{ task.command|truncate(40) }}
                                     {% elif task.exec_mode == 1 %}
                                         <i class="fas fa-file-code me-1"></i>Script
                                     {% elif task.exec_mode == 2 %}
-                                        <i class="fas fa-robot me-1"></i>{{ task.ai_prompt|default('AI Dynamic', true) }}
+                                        <i class="fas fa-robot me-1"></i>{{ task.ai_prompt|default('AI Dynamic', true)|truncate(40) }}
                                     {% endif %}
                                 </div>
                             </td>
@@ -58,28 +104,24 @@
                                 {% elif task.exec_mode == 1 %}
                                     <span class="badge bg-warning text-dark">Script</span>
                                 {% elif task.exec_mode == 2 %}
-                                    <span class="badge bg-info">
-                                        <i class="fas fa-robot me-1"></i>AI Dynamic
-                                    </span>
+                                    <span class="badge bg-info">AI</span>
                                 {% endif %}
                             </td>
                             <td>
                                 {% if task.schedule_type == 0 %}
                                     <span class="badge bg-secondary">Thủ công</span>
                                 {% elif task.schedule_type == 1 %}
-                                    <span class="badge bg-info">Mỗi {{ task.interval // 60 }} phút</span>
+                                    <span class="badge bg-info">{{ task.interval // 60 }}p</span>
                                 {% elif task.schedule_type == 2 %}
                                     <span class="badge bg-primary">Cron</span>
                                 {% endif %}
                             </td>
                             <td>
-                                <div class="d-flex align-items-center">
-                                    {% if task.enabled %}
-                                        <span class="badge bg-success me-2">Kích hoạt</span>
-                                    {% else %}
-                                        <span class="badge bg-secondary">Vô hiệu</span>
-                                    {% endif %}
-                                </div>
+                                {% if task.enabled %}
+                                    <span class="badge bg-success">Kích hoạt</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">Vô hiệu</span>
+                                {% endif %}
                             </td>
                             <td>
                                 {% if task.last_run_time > 0 %}
@@ -101,9 +143,9 @@
                                 {% endif %}
                             </td>
                             <td class="actions-cell">
-                                <div class="d-flex align-items-center">
+                                <div class="action-buttons">
                                     {% if task.enabled %}
-                                    <form action="{{ url_for('run_task', task_id=task.id) }}" method="POST" class="me-2">
+                                    <form action="{{ url_for('run_task', task_id=task.id) }}" method="POST" class="me-1">
                                         <button type="submit" class="btn btn-sm btn-outline-success" title="Chạy ngay">
                                             <i class="fas fa-play"></i>
                                         </button>
@@ -111,24 +153,24 @@
                                     {% endif %}
                                     <div class="dropdown">
                                         <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" data-bs-auto-close="true" aria-expanded="false">
-                                            Thao tác
+                                            <i class="fas fa-ellipsis-v"></i>
                                         </button>
-                                        <ul class="dropdown-menu" style="min-width: 200px;">
+                                        <ul class="dropdown-menu dropdown-menu-end" style="min-width: 160px;">
                                             <li>
                                                 <a class="dropdown-item" href="{{ url_for('view_task', task_id=task.id) }}">
-                                                    <i class="fas fa-eye me-1"></i> Xem chi tiết
+                                                    <i class="fas fa-eye me-1"></i> Chi tiết
                                                 </a>
                                             </li>
                                             <li>
                                                 <a class="dropdown-item" href="{{ url_for('edit_task', task_id=task.id) }}">
-                                                    <i class="fas fa-edit me-1"></i> Chỉnh sửa
+                                                    <i class="fas fa-edit me-1"></i> Sửa
                                                 </a>
                                             </li>
                                             <li>
                                                 <form action="{{ url_for('toggle_task', task_id=task.id) }}" method="POST" class="d-inline">
                                                     <button type="submit" class="dropdown-item">
                                                         <i class="fas {% if task.enabled %}fa-pause{% else %}fa-play{% endif %} me-1"></i>
-                                                        {% if task.enabled %}Tắt{% else %}Bật{% endif %} tác vụ
+                                                        {% if task.enabled %}Tắt{% else %}Bật{% endif %}
                                                     </button>
                                                 </form>
                                             </li>
@@ -148,17 +190,11 @@
                         {% endfor %}
                     {% else %}
                         <tr class="empty-state-row">
-                            <td colspan="8" class="text-center py-5">
-                                <i class="fas fa-tasks fa-4x text-muted mb-3"></i>
-                                <h5>Chưa có tác vụ nào</h5>
-                                <p class="text-muted">Bắt đầu bằng cách thêm một tác vụ mới</p>
+                            <td colspan="8" class="text-center py-4">
                                 <div>
-                                    <a href="{{ url_for('new_task') }}" class="btn btn-primary mt-2 me-2">
-                                        <i class="fas fa-plus me-1"></i>Thêm tác vụ mới
-                                    </a>
-                                    <a href="{{ url_for('ai_create_task_form') }}" class="btn btn-info mt-2">
-                                        <i class="fas fa-robot me-1"></i>Tạo tác vụ với AI
-                                    </a>
+                                    <i class="fas fa-spinner fa-spin fa-2x text-primary mb-2"></i>
+                                    <h5 class="mt-2">Đang tải danh sách tác vụ...</h5>
+                                    <p class="text-muted small">Vui lòng đợi trong giây lát.</p>
                                 </div>
                             </td>
                         </tr>

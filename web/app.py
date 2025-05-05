@@ -231,6 +231,42 @@ def view_task(task_id):
                 else:
                     dependency_names[dep_id] = f"Tác vụ {dep_id}"
         
+        # Lấy nội dung script nếu là task dùng script
+        if task.get('exec_mode') == 1:
+            # Kiểm tra xem đã có script_content chưa
+            if 'script_content' not in task or not task['script_content']:
+                # Tìm kiếm trong _last_view_output nếu có
+                if hasattr(task_api, '_last_view_output') and task_api._last_view_output:
+                    # Trích xuất script content từ output trước đó
+                    try:
+                        lines = task_api._last_view_output.split('\n')
+                        script_content = []
+                        in_script_section = False
+                        
+                        for line in lines:
+                            if line.strip() == "Script:":
+                                in_script_section = True
+                                continue
+                            elif in_script_section and (line.strip().startswith("Schedule:") or 
+                                                      line.strip().startswith("Working Directory:") or
+                                                      line.strip().startswith("Max Runtime:")):
+                                in_script_section = False
+                                break
+                            elif in_script_section:
+                                script_content.append(line)
+                        
+                        if script_content:
+                            task['script_content'] = '\n'.join(script_content).strip()
+                            print(f"Successfully extracted script content from cached output")
+                    except Exception as e:
+                        print(f"Error extracting script from cached output: {e}")
+                
+                # Nếu không có script_content, lấy từ API
+                if 'script_content' not in task or not task['script_content']:
+                    script_content = task_api.get_script_content(task_id)
+                    if script_content:
+                        task['script_content'] = script_content
+                        
         return render_template('task_detail.html', task=task, dependency_names=dependency_names)
     else:
         flash('Không tìm thấy tác vụ với ID này!', 'error')

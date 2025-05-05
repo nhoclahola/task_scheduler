@@ -40,6 +40,10 @@ class TaskAPI:
         self.slave_fd = None
         self.interactive_lock = threading.Lock()
         
+        # Cache cho output của lệnh view để tránh gọi lại nhiều lần
+        self._last_view_output = ""
+        self._last_view_task_id = -1
+        
         if self.simulation_mode:
             print("WARNING: Running in simulation mode - no taskscheduler binary available")
             self.next_id = 1
@@ -282,26 +286,229 @@ class TaskAPI:
             
             # Parse output để lấy danh sách tác vụ
             tasks = []
+            current_task = None
             
-            # Lấy danh sách các ID tác vụ bằng cách tìm "ID: (\d+)"
-            task_id_pattern = re.compile(r"ID: (\d+)")
-            task_ids = task_id_pattern.findall(output)
+            # Phân tích output từ lệnh list
+            lines = output.split('\n')
+            for line in lines:
+                line = line.strip()
+                
+                # Bỏ qua dòng trống và dòng đặc biệt
+                if not line or line == "----------" or line == "Task List:" or line == ">":
+                    # Nếu đang có một task và gặp separator, thêm task vào danh sách
+                    if current_task and line == "----------":
+                        tasks.append(current_task)
+                        current_task = None
+                    continue
+                
+                # Bắt đầu task mới
+                if line.startswith("ID:"):
+                    if current_task:
+                        tasks.append(current_task)
+                    
+                    try:
+                        task_id = int(line.split(":")[1].strip())
+                        current_task = {'id': task_id}
+                    except (ValueError, IndexError):
+                        print(f"Error parsing task ID from line: {line}")
+                        continue
+                    
+                # Phân tích các trường thông tin khác    
+                elif current_task and ":" in line:
+                    try:
+                        key, value = line.split(":", 1)
+                        key = key.strip().lower().replace(" ", "_")
+                        value = value.strip()
+                        
+                        # Chuyển đổi các trường thành kiểu dữ liệu phù hợp
+                        if key == "id":
+                            current_task[key] = int(value)
+                        elif key == "name":
+                            current_task[key] = value
+                        elif key == "enabled":
+                            current_task[key] = value.lower() == "yes"
+                        elif key == "type":
+                            if "command" in value.lower():
+                                current_task["exec_mode"] = 0  # EXEC_COMMAND
+                            elif "script" in value.lower():
+                                current_task["exec_mode"] = 1  # EXEC_SCRIPT
+                            elif "ai dynamic" in value.lower():
+                                current_task["exec_mode"] = 2  # EXEC_AI_DYNAMIC
+                        elif key == "command":
+                            current_task[key] = value
+                        elif key == "script" and "size:" in value.lower():
+                            # Ghi nhận thông tin về script (kích thước)
+                            current_task["script_size"] = value
+                        elif key == "ai_prompt":
+                            current_task[key] = value
+                        elif key == "system_metrics":
+                            current_task[key] = value.split(",")
+                        elif key == "schedule":
+                            # Xử lý lịch trình
+                            if "Manual" in value:
+                                current_task["schedule_type"] = 0  # SCHEDULE_MANUAL
+                            elif "Every" in value and "minutes" in value:
+                                current_task["schedule_type"] = 1  # SCHEDULE_INTERVAL
+                                # Trích xuất số phút
+                                interval_match = re.search(r"Every (\d+) minutes", value)
+                                if interval_match:
+                                    minutes = int(interval_match.group(1))
+                                    current_task["interval"] = minutes * 60  # Chuyển phút sang giây
+                            elif "Cron:" in value:
+                                current_task["schedule_type"] = 2  # SCHEDULE_CRON
+                                # Trích xuất biểu thức cron
+                                cron_match = re.search(r"Cron: (.+)", value)
+                                if cron_match:
+                                    current_task["cron_expression"] = cron_match.group(1).strip()
+                        elif key == "working_directory" or key == "working_dir":
+                            if "(default)" in value:
+                                current_task["working_dir"] = ""
+                            else:
+                                current_task["working_dir"] = value
+                        elif key == "max_runtime":
+                            try:
+                                runtime_match = re.search(r"(\d+) seconds", value)
+                                if runtime_match:
+                                    current_task["max_runtime"] = int(runtime_match.group(1))
+                                else:
+                                    current_task["max_runtime"] = 0
+                            except:
+                                current_task["max_runtime"] = 0
+                        elif key == "created":
+                            try:
+                                dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+                                current_task["creation_time"] = int(dt.timestamp())
+                            except:
+                                current_task["creation_time"] = 0
+                        elif key == "last_run":
+                            if value == "Never":
+                                current_task["last_run_time"] = 0
+                            else:
+                                try:
+                                    dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+                                    current_task["last_run_time"] = int(dt.timestamp())
+                                except:
+                                    current_task["last_run_time"] = 0
+                        elif key == "exit_code":
+                            try:
+                                current_task["exit_code"] = int(value)
+                            except:
+                                current_task["exit_code"] = -1
+                        elif key == "next_run":
+                            if value == "Not scheduled":
+                                current_task["next_run_time"] = 0
+                            else:
+                                try:
+                                    dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+                                    current_task["next_run_time"] = int(dt.timestamp())
+                                except:
+                                    current_task["next_run_time"] = 0
+                        elif key == "dependencies":
+                            try:
+                                # Danh sách các task ID mà task này phụ thuộc
+                                if value.isdigit():  # Một task ID duy nhất
+                                    current_task["dependencies"] = [int(value)]
+                                else:  # Nhiều task ID
+                                    # Xử lý các trường hợp khác
+                                    current_task["dependencies"] = []
+                            except:
+                                current_task["dependencies"] = []
+                        elif key == "dependency_behavior":
+                            try:
+                                if "All Success" in value:
+                                    current_task["dep_behavior"] = 1
+                                elif "Any Complete" in value:
+                                    current_task["dep_behavior"] = 2
+                                elif "All Complete" in value:
+                                    current_task["dep_behavior"] = 3
+                                else:  # "Any Success" mặc định
+                                    current_task["dep_behavior"] = 0
+                            except:
+                                current_task["dep_behavior"] = 0
+                    except Exception as e:
+                        print(f"Error parsing line '{line}': {e}")
             
-            print(f"Found task IDs: {task_ids}")
+            # Thêm task cuối cùng nếu có
+            if current_task:
+                tasks.append(current_task)
             
-            # Lấy thông tin chi tiết cho từng tác vụ
-            for task_id in task_ids:
-                try:
-                    task_id = int(task_id)
-                    detailed_task = self.get_task(task_id)
-                    if detailed_task:
-                        tasks.append(detailed_task)
-                except Exception as e:
-                    print(f"Error getting details for task {task_id}: {e}")
+            # Đảm bảo tất cả các tasks có các trường cần thiết
+            for task in tasks:
+                # Thêm các trường mặc định nếu chưa có
+                if "dependencies" not in task:
+                    task["dependencies"] = []
+                if "dep_behavior" not in task:
+                    task["dep_behavior"] = 0
+                if "frequency" not in task:
+                    # Đặt frequency dựa vào schedule_type
+                    if task.get("schedule_type") == 1:  # SCHEDULE_INTERVAL
+                        interval = task.get("interval", 0)
+                        if interval == 86400:  # 1 ngày
+                            task["frequency"] = 1  # FREQUENCY_DAILY
+                        elif interval == 604800:  # 1 tuần
+                            task["frequency"] = 2  # FREQUENCY_WEEKLY
+                        else:
+                            task["frequency"] = 0  # FREQUENCY_ONCE
+                    else:
+                        task["frequency"] = 0  # FREQUENCY_ONCE
+                
+                # Đảm bảo có command hoặc script_content cho tác vụ script/command
+                if task.get("exec_mode") == 0 and "command" not in task:
+                    task["command"] = ""
             
             return tasks
         except Exception as e:
             print(f"Error parsing task list: {e}")
+            return []
+    
+    def _get_tasks_from_database(self):
+        """Truy cập trực tiếp vào cơ sở dữ liệu để lấy danh sách tác vụ"""
+        try:
+            import sqlite3
+            db_path = os.path.join(self.data_dir, "tasks.db")
+            if not os.path.exists(db_path):
+                print(f"Database file not found at {db_path}")
+                return []
+            
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # Truy vấn để lấy tất cả các tác vụ
+            cursor.execute("""
+                SELECT * FROM tasks
+            """)
+            
+            tasks = []
+            for row in cursor.fetchall():
+                task = {}
+                for key in row.keys():
+                    if key in ['id', 'frequency', 'schedule_type', 'exit_code', 'max_runtime', 'dep_behavior', 'exec_mode']:
+                        task[key] = int(row[key])
+                    elif key in ['creation_time', 'next_run_time', 'last_run_time', 'interval']:
+                        task[key] = int(row[key])
+                    elif key == 'enabled':
+                        task[key] = bool(row[key])
+                    else:
+                        task[key] = row[key]
+                
+                # Chuẩn bị dependencies
+                task['dependencies'] = []
+                
+                # Truy vấn để lấy phụ thuộc
+                cursor.execute("""
+                    SELECT dependency_id FROM dependencies WHERE task_id = ?
+                """, (task['id'],))
+                
+                for dep_row in cursor.fetchall():
+                    task['dependencies'].append(int(dep_row[0]))
+                
+                tasks.append(task)
+            
+            conn.close()
+            return tasks
+        except Exception as e:
+            print(f"Error accessing database: {e}")
             return []
     
     def get_task(self, task_id):
@@ -334,6 +541,10 @@ class TaskAPI:
         if exit_code != 0 or not output.strip() or "Unknown command" in output:
             print(f"Error viewing task {task_id}: {output}")
             return None
+        
+        # Lưu output để sử dụng lại sau này
+        self._last_view_output = output
+        self._last_view_task_id = task_id
         
         try:
             # Parse output để lấy thông tin tác vụ
@@ -926,7 +1137,7 @@ class TaskAPI:
                     new_task_id = self.add_task(new_task_data)
                     if new_task_id <= 0:
                         print(f"Error creating new task when converting to AI dynamic")
-            return False
+                        return False
         
                     # Chuyển đổi task mới thành AI dynamic
                     ai_prompt = task_data['ai_prompt']
@@ -1697,6 +1908,85 @@ fi
             {'id': 'processes', 'name': 'Tiến trình', 'description': 'Thông tin về các tiến trình đang chạy'}
         ]
 
+    def get_script_content(self, task_id):
+        """Lấy nội dung script của tác vụ có exec_mode = 1"""
+        if self.simulation_mode:
+            # Trả về dữ liệu mẫu trong chế độ giả lập
+            return "#!/bin/bash\n\necho 'This is a sample script content'\n"
+        
+        # Kiểm tra nếu đã có output lưu từ view trước đó
+        if self._last_view_task_id == task_id and self._last_view_output:
+            print(f"Using cached output for script content extraction for task {task_id}")
+            output = self._last_view_output
+        else:
+            # Lấy thông tin về task trước
+            task = self.get_task(task_id)
+            if not task or task.get('exec_mode') != 1:
+                return None
+            
+            # Không cần gọi view lại vì get_task đã lưu output
+            output = self._last_view_output
+            
+        # Tách output theo dòng để phân tích đúng hơn
+        lines = output.split('\n')
+        script_content = []
+        in_script_section = False
+        
+        for line in lines:
+            if line.strip() == "Script:":
+                in_script_section = True
+                continue
+            elif in_script_section and (line.strip().startswith("Schedule:") or 
+                                       line.strip().startswith("Working Directory:") or
+                                       line.strip().startswith("Max Runtime:")):
+                in_script_section = False
+                break
+            elif in_script_section:
+                script_content.append(line)
+        
+        if script_content:
+            return '\n'.join(script_content).strip()
+        
+        # Thử dùng regex nếu cách trên không hoạt động
+        script_match = re.search(r"Script:\s*\n(.*?)(?:\n\nSchedule|\nSchedule:|\nWorking Directory:|\n\n>)",
+                               output, re.DOTALL)
+        if script_match:
+            return script_match.group(1).strip()
+        
+        # Thử đọc từ file nếu không thành công với view
+        # Lấy thông tin về task để biết file path
+        if not hasattr(self, '_task_cache'):
+            self._task_cache = {}
+        
+        if task_id not in self._task_cache:
+            task = self.get_task(task_id)
+            if task:
+                self._task_cache[task_id] = task
+        else:
+            task = self._task_cache[task_id]
+        
+        if task and task.get('script_file'):
+            try:
+                with open(task.get('script_file'), 'r') as f:
+                    return f.read()
+            except Exception as e:
+                print(f"Error reading script file: {e}")
+        
+        # Thử tìm trong thư mục scripts nếu có
+        script_dir = os.path.join(self.bin_dir, "scripts")
+        if os.path.exists(script_dir):
+            # Tìm file script có pattern task_<id>_*
+            for filename in os.listdir(script_dir):
+                if filename.startswith(f"task_{task_id}_") or filename == f"task_{task_id}":
+                    try:
+                        with open(os.path.join(script_dir, filename), 'r') as f:
+                            return f.read()
+                    except Exception as e:
+                        print(f"Error reading potential script file: {e}")
+        
+        # Không tìm thấy nội dung script
+        return None
+    
     def __del__(self):
         """Dọn dẹp khi đối tượng bị hủy"""
         if not self.simulation_mode and self.process and self.process.poll() is None:
