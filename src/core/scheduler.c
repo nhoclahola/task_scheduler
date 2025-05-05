@@ -826,6 +826,9 @@ static void* scheduler_thread_func(void *arg) {
                 if (task->exit_code == 0) {
                     log_message(LOG_INFO, "Task executed successfully: ID=%d, Name=%s, Exit code=0",
                            original_task->id, original_task->name);
+                           
+                    // Gửi email thông báo cho task thành công
+                    email_send_task_notification(original_task, original_task->exit_code);
                 } else {
                     log_message(LOG_INFO, "Task executed with errors: ID=%d, Name=%s, Exit code=%d",
                            original_task->id, original_task->name, original_task->exit_code);

@@ -8,11 +8,12 @@
  * Structure to hold email configuration
  */
 typedef struct {
-    char email_address[256];    // Email address
+    char email_address[256];    // Email address (sender)
     char email_password[256];   // Email password or app password
     char smtp_server[256];      // SMTP server
     int smtp_port;              // SMTP port
-    bool email_enabled;         // Email notification enabled flag
+    bool enabled;               // Email notification enabled flag
+    char recipient_email[256];  // Recipient email address (can be different from sender)
 } EmailConfig;
 
 /**
@@ -34,15 +35,17 @@ bool email_save_default_config(const char *config_path);
 /**
  * Update email configuration
  * 
- * @param email_address Email address
+ * @param email_address Email address (sender)
  * @param email_password Email password
  * @param smtp_server SMTP server
  * @param smtp_port SMTP port
+ * @param recipient_email Recipient email address (NULL to use sender address)
  * @param config_path Configuration file path, NULL for default
  * @return true on success, false on failure
  */
 bool email_update_config(const char *email_address, const char *email_password, 
-                         const char *smtp_server, int smtp_port, const char *config_path);
+                         const char *smtp_server, int smtp_port, 
+                         const char *recipient_email, const char *config_path);
 
 /**
  * Enable or disable email notifications
@@ -60,6 +63,15 @@ bool email_set_enabled(bool enabled, const char *config_path);
  * @return true if configuration found, false otherwise
  */
 bool email_get_config(EmailConfig *config);
+
+/**
+ * Set recipient email address for notifications
+ * 
+ * @param recipient_email Recipient email address
+ * @param config_path Configuration file path, NULL for default
+ * @return true on success, false on failure
+ */
+bool email_set_recipient(const char *recipient_email, const char *config_path);
 
 /**
  * Send email notification after successful task execution

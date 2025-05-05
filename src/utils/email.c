@@ -8,6 +8,21 @@
 
 #define DEFAULT_CONFIG_PATH "data/config.json"
 
+// Helper struct for curl
+struct upload_status {
+    const char *data;
+    size_t size;
+};
+
+// Get current time as string
+char* get_current_time_str(void) {
+    static char buffer[64];
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    strftime(buffer, sizeof(buffer), "%a, %d %b %Y %H:%M:%S %z", tm_info);
+    return buffer;
+}
+
 // Global email configuration
 static EmailConfig email_config;
 static bool is_initialized = false;
@@ -20,7 +35,7 @@ bool email_init(const char *config_path) {
     // Set default values
     memset(&email_config, 0, sizeof(EmailConfig));
     email_config.smtp_port = 587; // Default TLS port
-    email_config.email_enabled = false;
+    email_config.enabled = false;
     
     const char *path = config_path ? config_path : DEFAULT_CONFIG_PATH;
     
@@ -68,6 +83,7 @@ bool email_init(const char *config_path) {
         cJSON *server = cJSON_GetObjectItem(email, "smtp_server");
         cJSON *port = cJSON_GetObjectItem(email, "smtp_port");
         cJSON *enabled = cJSON_GetObjectItem(email, "enabled");
+        cJSON *recipient = cJSON_GetObjectItem(email, "recipient_email");
         
         if (address && cJSON_IsString(address)) {
             safe_strcpy(email_config.email_address, address->valuestring, sizeof(email_config.email_address));
@@ -86,7 +102,14 @@ bool email_init(const char *config_path) {
         }
         
         if (enabled && cJSON_IsBool(enabled)) {
-            email_config.email_enabled = cJSON_IsTrue(enabled);
+            email_config.enabled = cJSON_IsTrue(enabled);
+        }
+        
+        if (recipient && cJSON_IsString(recipient)) {
+            safe_strcpy(email_config.recipient_email, recipient->valuestring, sizeof(email_config.recipient_email));
+        } else if (address && cJSON_IsString(address)) {
+            // If recipient is not specified, use sender address by default
+            safe_strcpy(email_config.recipient_email, address->valuestring, sizeof(email_config.recipient_email));
         }
     }
     
@@ -170,7 +193,15 @@ bool email_save_default_config(const char *config_path) {
     }
     
     if (!cJSON_GetObjectItem(email, "enabled")) {
-        cJSON_AddBoolToObject(email, "enabled", email_config.email_enabled);
+        cJSON_AddBoolToObject(email, "enabled", email_config.enabled);
+    }
+    
+    if (!cJSON_GetObjectItem(email, "recipient_email")) {
+        // Default to sender address if not set
+        const char *recipient = email_config.recipient_email[0] ? 
+                              email_config.recipient_email : 
+                              email_config.email_address;
+        cJSON_AddStringToObject(email, "recipient_email", recipient);
     }
     
     // Write to file
@@ -198,7 +229,8 @@ bool email_save_default_config(const char *config_path) {
 }
 
 bool email_update_config(const char *email_address, const char *email_password, 
-                       const char *smtp_server, int smtp_port, const char *config_path) {
+                       const char *smtp_server, int smtp_port,
+                       const char *recipient_email, const char *config_path) {
     if (!is_initialized && !email_init(config_path)) {
         return false;
     }
@@ -218,6 +250,13 @@ bool email_update_config(const char *email_address, const char *email_password,
     
     if (smtp_port > 0) {
         email_config.smtp_port = smtp_port;
+    }
+    
+    if (recipient_email) {
+        safe_strcpy(email_config.recipient_email, recipient_email, sizeof(email_config.recipient_email));
+    } else if (email_address && email_config.recipient_email[0] == '\0') {
+        // If recipient is not specified but we have a new sender, use it as recipient too
+        safe_strcpy(email_config.recipient_email, email_address, sizeof(email_config.recipient_email));
     }
     
     const char *path = config_path ? config_path : DEFAULT_CONFIG_PATH;
@@ -289,6 +328,9 @@ bool email_update_config(const char *email_address, const char *email_password,
     cJSON_DeleteItemFromObject(email, "smtp_port");
     cJSON_AddNumberToObject(email, "smtp_port", email_config.smtp_port);
     
+    cJSON_DeleteItemFromObject(email, "recipient_email");
+    cJSON_AddStringToObject(email, "recipient_email", email_config.recipient_email);
+    
     // Write to file
     char *json_str = cJSON_Print(json);
     if (!json_str) {
@@ -320,8 +362,8 @@ bool email_set_enabled(bool enabled, const char *config_path) {
         return false;
     }
     
-    email_config.email_enabled = enabled;
-    printf("Debug: Set email_enabled to %d\n", enabled);
+    email_config.enabled = enabled;
+    printf("Debug: Set enabled to %d\n", enabled);
     
     const char *path = config_path ? config_path : DEFAULT_CONFIG_PATH;
     printf("Debug: Using config path: %s\n", path);
@@ -400,8 +442,8 @@ bool email_set_enabled(bool enabled, const char *config_path) {
     
     // Update enabled flag
     cJSON_DeleteItemFromObject(email, "enabled");
-    cJSON_AddBoolToObject(email, "enabled", email_config.email_enabled);
-    printf("Debug: Added enabled=%d to JSON\n", email_config.email_enabled);
+    cJSON_AddBoolToObject(email, "enabled", email_config.enabled);
+    printf("Debug: Added enabled=%d to JSON\n", email_config.enabled);
     
     // Print the entire JSON structure
     char *debug_json = cJSON_Print(json);
@@ -450,15 +492,9 @@ bool email_get_config(EmailConfig *config) {
     return false;
 }
 
-// Helper struct for curl
-struct UploadStatus {
-    const char *data;
-    size_t size;
-};
-
 // CURL callback function to provide data for sending
 static size_t payload_source(void *ptr, size_t size, size_t nmemb, void *userp) {
-    struct UploadStatus *upload_ctx = (struct UploadStatus *)userp;
+    struct upload_status *upload_ctx = (struct upload_status *)userp;
     
     if ((size == 0) || (nmemb == 0) || ((size*nmemb) < 1)) {
         return 0;
@@ -486,7 +522,7 @@ bool email_send_task_notification(const Task *task, int exit_code) {
     }
     
     // Check if email notifications are enabled
-    if (!email_config.email_enabled) {
+    if (!email_config.enabled) {
         log_message(LOG_INFO, "Email notifications are disabled");
         return false;
     }
@@ -512,6 +548,13 @@ bool email_send_task_notification(const Task *task, int exit_code) {
                    task->id, task->name, exit_code);
         return false;
     }
+
+    // Get recipient email - use recipient_email if set, otherwise use sender address
+    const char *recipient = email_config.recipient_email[0] != '\0' ? 
+                            email_config.recipient_email : 
+                            email_config.email_address;
+
+    log_message(LOG_INFO, "Sending notification to: %s", recipient);
     
     // Prepare email content
     char date_str[64];
@@ -543,7 +586,7 @@ bool email_send_task_notification(const Task *task, int exit_code) {
     snprintf(from_header, sizeof(from_header), "From: Task Scheduler <%s>", email_config.email_address);
     
     char to_header[512];
-    snprintf(to_header, sizeof(to_header), "To: <%s>", email_config.email_address);
+    snprintf(to_header, sizeof(to_header), "To: <%s>", recipient);
     
     char subject_header[512];
     snprintf(subject_header, sizeof(subject_header), "Subject: %s", subject);
@@ -582,7 +625,7 @@ bool email_send_task_notification(const Task *task, int exit_code) {
              from_header, to_header, subject_header, date_header, message_id_header, body);
     
     // Initialize upload status
-    struct UploadStatus upload_ctx;
+    struct upload_status upload_ctx;
     upload_ctx.data = email_data;
     upload_ctx.size = strlen(email_data);
     
@@ -611,7 +654,7 @@ bool email_send_task_notification(const Task *task, int exit_code) {
     curl_easy_setopt(curl, CURLOPT_MAIL_FROM, email_config.email_address);
     
     struct curl_slist *recipients = NULL;
-    recipients = curl_slist_append(recipients, email_config.email_address);
+    recipients = curl_slist_append(recipients, recipient);
     curl_easy_setopt(curl, CURLOPT_MAIL_RCPT, recipients);
     
     // Set up callback function to provide the email data
@@ -634,7 +677,224 @@ bool email_send_task_notification(const Task *task, int exit_code) {
         return false;
     }
     
-    log_message(LOG_INFO, "Email notification sent successfully for task %d (%s)",
-               task->id, task->name);
+    log_message(LOG_INFO, "Email notification sent successfully to %s for task %d (%s)",
+               recipient, task->id, task->name);
+    return true;
+}
+
+bool email_set_recipient(const char *recipient_email, const char *config_path) {
+    printf("Setting email recipient to: %s\n", recipient_email);
+    
+    if (!is_initialized && !email_init(config_path)) {
+        printf("Failed to initialize email\n");
+        return false;
+    }
+    
+    if (!recipient_email) {
+        printf("Recipient email is NULL\n");
+        return false;
+    }
+    
+    const char *path = config_path ? config_path : DEFAULT_CONFIG_PATH;
+    printf("Using configuration path: %s\n", path);
+    
+    // Update configuration
+    safe_strcpy(email_config.recipient_email, recipient_email, sizeof(email_config.recipient_email));
+    
+    // Try to open existing config
+    FILE *file = fopen(path, "r");
+    cJSON *json = NULL;
+    
+    if (file) {
+        printf("Reading existing configuration file\n");
+        // Read existing config
+        fseek(file, 0, SEEK_END);
+        long file_size = ftell(file);
+        fseek(file, 0, SEEK_SET);
+        
+        char *buffer = (char *)malloc(file_size + 1);
+        if (!buffer) {
+            printf("Failed to allocate memory for file content\n");
+            fclose(file);
+            return false;
+        }
+        
+        size_t read_size = fread(buffer, 1, file_size, file);
+        fclose(file);
+        
+        if (read_size == (size_t)file_size) {
+            buffer[file_size] = '\0';
+            json = cJSON_Parse(buffer);
+            if (!json) {
+                printf("Failed to parse JSON: %s\n", cJSON_GetErrorPtr());
+            }
+        } else {
+            printf("Failed to read entire file: %zu of %ld bytes read\n", read_size, file_size);
+        }
+        
+        free(buffer);
+    } else {
+        printf("No existing configuration file found, creating new one\n");
+    }
+    
+    // Create new JSON object if we couldn't read existing one
+    if (!json) {
+        json = cJSON_CreateObject();
+        if (!json) {
+            printf("Failed to create JSON object\n");
+            return false;
+        }
+    }
+    
+    // Create or update email section
+    cJSON *email = cJSON_GetObjectItem(json, "email");
+    if (!email) {
+        printf("Creating new email section\n");
+        email = cJSON_CreateObject();
+        if (!email) {
+            printf("Failed to create email JSON object\n");
+            cJSON_Delete(json);
+            return false;
+        }
+        cJSON_AddItemToObject(json, "email", email);
+    } else if (!cJSON_IsObject(email)) {
+        printf("Replacing invalid email section\n");
+        cJSON_DeleteItemFromObject(json, "email");
+        email = cJSON_CreateObject();
+        if (!email) {
+            printf("Failed to create replacement email JSON object\n");
+            cJSON_Delete(json);
+            return false;
+        }
+        cJSON_AddItemToObject(json, "email", email);
+    } else {
+        printf("Updating existing email section\n");
+    }
+    
+    // Update recipient email
+    cJSON_DeleteItemFromObject(email, "recipient_email");
+    cJSON_AddStringToObject(email, "recipient_email", email_config.recipient_email);
+    printf("Added recipient_email to JSON: %s\n", email_config.recipient_email);
+    
+    // Write to file
+    char *json_str = cJSON_Print(json);
+    if (!json_str) {
+        printf("Failed to serialize JSON\n");
+        cJSON_Delete(json);
+        return false;
+    }
+    
+    file = fopen(path, "w");
+    if (!file) {
+        printf("Failed to open file for writing: %s\n", path);
+        free(json_str);
+        cJSON_Delete(json);
+        return false;
+    }
+    
+    size_t bytes_written = fprintf(file, "%s", json_str);
+    printf("Wrote %zu bytes to configuration file\n", bytes_written);
+    fclose(file);
+    
+    free(json_str);
+    cJSON_Delete(json);
+    
+    printf("Successfully set recipient email to: %s\n", email_config.recipient_email);
+    return true;
+}
+
+bool email_send_message(const char *subject, const char *body) {
+    if (!is_initialized) {
+        return false;
+    }
+    
+    if (!email_config.enabled) {
+        // Email notifications are disabled
+        return true;
+    }
+    
+    if (email_config.email_address[0] == '\0' || 
+        email_config.email_password[0] == '\0' || 
+        email_config.smtp_server[0] == '\0' || 
+        email_config.smtp_port <= 0) {
+        // Email configuration is incomplete
+        return false;
+    }
+    
+    // Check if recipient is configured, if not, use sender address
+    const char *recipient = email_config.recipient_email[0] != '\0' ? 
+                           email_config.recipient_email : 
+                           email_config.email_address;
+    
+    printf("Sending email from %s to %s via %s:%d\n", 
+           email_config.email_address, recipient,
+           email_config.smtp_server, email_config.smtp_port);
+    
+    curl_global_init(CURL_GLOBAL_ALL);
+    
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        curl_global_cleanup();
+        return false;
+    }
+    
+    struct curl_slist *recipients = NULL;
+    recipients = curl_slist_append(recipients, recipient);
+    
+    // Create email content
+    char *email_content = malloc(1024 + (body ? strlen(body) : 0));
+    if (!email_content) {
+        curl_slist_free_all(recipients);
+        curl_easy_cleanup(curl);
+        curl_global_cleanup();
+        return false;
+    }
+    
+    char *time_str = get_current_time_str();
+    sprintf(email_content,
+            "Date: %s\r\n"
+            "To: <%s>\r\n"
+            "From: <%s>\r\n"
+            "Subject: %s\r\n"
+            "\r\n"
+            "%s\r\n",
+            time_str,
+            recipient,
+            email_config.email_address,
+            subject ? subject : "Task Scheduler Notification",
+            body ? body : "");
+    
+    struct upload_status upload_ctx;
+    upload_ctx.data = email_content;
+    upload_ctx.size = strlen(email_content);
+    
+    char url[256];
+    snprintf(url, sizeof(url), "smtp://%s:%d", email_config.smtp_server, email_config.smtp_port);
+    
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_MAIL_FROM, email_config.email_address);
+    curl_easy_setopt(curl, CURLOPT_MAIL_RCPT, recipients);
+    curl_easy_setopt(curl, CURLOPT_READFUNCTION, payload_source);
+    curl_easy_setopt(curl, CURLOPT_READDATA, &upload_ctx);
+    curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERNAME, email_config.email_address);
+    curl_easy_setopt(curl, CURLOPT_PASSWORD, email_config.email_password);
+    curl_easy_setopt(curl, CURLOPT_USE_SSL, CURLUSESSL_ALL);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    
+    CURLcode res = curl_easy_perform(curl);
+    
+    free(email_content);
+    curl_slist_free_all(recipients);
+    curl_easy_cleanup(curl);
+    curl_global_cleanup();
+    
+    if (res != CURLE_OK) {
+        printf("Failed to send email: %s\n", curl_easy_strerror(res));
+        return false;
+    }
+    
+    printf("Email sent successfully to %s\n", recipient);
     return true;
 } 

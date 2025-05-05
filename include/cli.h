@@ -108,10 +108,11 @@ void cli_convert_to_command(int argc, char *argv[]);
 /**
  * CLI commands for email configuration
  */
-void cli_set_email_config(int argc, char *argv[]);
-void cli_enable_email(int argc, char *argv[]);
-void cli_disable_email(int argc, char *argv[]);
-void cli_show_email_config(int argc, char *argv[]);
+int cli_set_email_config(int argc, char *argv[]);
+int cli_enable_email(int argc, char *argv[]);
+int cli_disable_email(int argc, char *argv[]);
+int cli_show_email_config(int argc, char *argv[]);
+int cli_set_recipient_email(int argc, char *argv[]);
 
 /**
  * Process a command line
