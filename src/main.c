@@ -4,6 +4,7 @@
 #include "../include/utils.h"
 #include "../include/db.h"
 #include "../include/ai.h"
+#include "../include/email.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,6 +68,12 @@ int main(int argc, char *argv[]) {
     // Set up signal handlers
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+    
+    // Initialize email module
+    if (!email_init(NULL)) {
+        log_message(LOG_WARNING, "Failed to initialize email module");
+        // Continue anyway, email features will be disabled
+    }
     
     // Initialize scheduler
     if (!scheduler_init(&scheduler, options.data_dir)) {

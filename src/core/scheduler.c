@@ -2,6 +2,7 @@
 #include "../../include/utils.h"
 #include "../../include/db.h"
 #include "../../include/ai.h"
+#include "../../include/email.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -394,166 +395,124 @@ bool scheduler_execute_task(Scheduler *scheduler, int task_id) {
     pthread_mutex_lock(&scheduler->lock);
     
     // Find the task
-    int index = find_task_index(scheduler, task_id);
-    if (index < 0) {
+    int idx = find_task_index(scheduler, task_id);
+    if (idx < 0) {
         pthread_mutex_unlock(&scheduler->lock);
-        log_message(LOG_ERROR, "Cannot execute task: Task ID %d not found", task_id);
+        log_message(LOG_ERROR, "Task ID %d not found", task_id);
         return false;
     }
     
-    Task *task = &scheduler->tasks[index];
+    Task *task = &scheduler->tasks[idx];
     
-    // Double check task ID is correct
-    if (task->id != task_id) {
-        pthread_mutex_unlock(&scheduler->lock);
-        log_message(LOG_ERROR, "Task ID mismatch in scheduler_execute_task: Expected %d, found %d", 
-            task_id, task->id);
-        return false;
-    }
-    
-    // Check if the task is enabled
+    // Check if task is enabled
     if (!task->enabled) {
         pthread_mutex_unlock(&scheduler->lock);
-        log_message(LOG_ERROR, "Cannot execute task %d: Task is disabled", task_id);
+        log_message(LOG_WARNING, "Task %d is disabled", task_id);
         return false;
     }
     
-    // Check if dependencies are satisfied for manual execution
-    if (task->dependency_count > 0) {
-        if (!check_dependencies_satisfied(scheduler, task)) {
-            log_message(LOG_WARNING, "Cannot execute task %d: dependencies not satisfied", task_id);
-            pthread_mutex_unlock(&scheduler->lock);
-            return false;
-        }
+    // Check dependencies before execution
+    if (task->dependency_count > 0 && !check_dependencies_satisfied(scheduler, task)) {
+        pthread_mutex_unlock(&scheduler->lock);
+        log_message(LOG_WARNING, "Dependencies not satisfied for task %d", task_id);
+        return false;
     }
     
-    bool result = false;
-    int exit_code = 0;
+    // Set up working directory
+    char *working_dir = NULL;
+    if (task->working_dir[0] != '\0') {
+        working_dir = task->working_dir;
+    }
     
     // Execute based on mode
-    if (task->exec_mode == EXEC_SCRIPT) {
-        // Release the lock during script execution
-        pthread_mutex_unlock(&scheduler->lock);
-        
-        result = execute_task_with_script(scheduler, task);
-        
-        // Reacquire the lock
-        pthread_mutex_lock(&scheduler->lock);
-    } else if (task->exec_mode == EXEC_AI_DYNAMIC) {
-        // Tải lại cấu hình mỗi lần để đảm bảo đọc API key mới nhất
-        ai_load_config(NULL);
-        
-        // Lấy Deepseek API key từ cấu hình hoặc biến môi trường
-        const char *api_key = ai_get_api_key();
-        if (!api_key) {
-            log_message(LOG_ERROR, "DeepSeek API key not found in config file or environment variable");
-            log_message(LOG_INFO, "Please set your API key using 'taskscheduler set-api-key YOUR_API_KEY' command");
-            exit_code = -1;
-        } else {
-            // Thu thập thông tin hệ thống
+    int exit_code = -1;
+    bool success = false;
+    
+    char date_str[64];
+    time_t now = time(NULL);
+    time_to_string(now, date_str, sizeof(date_str), "%Y-%m-%d %H:%M:%S");
+    
+    log_message(LOG_INFO, "Executing task %d (%s) at %s", task->id, task->name, date_str);
+    
+    switch (task->exec_mode) {
+        case EXEC_COMMAND:
+            // Execute directly
+            success = run_command_with_timeout(task->command, working_dir, task->max_runtime, &exit_code);
+            break;
+            
+        case EXEC_SCRIPT:
+            // Execute script
+            success = execute_task_with_script(scheduler, task);
+            if (success) {
+                exit_code = 0;
+            }
+            break;
+            
+        case EXEC_AI_DYNAMIC: {
+            // For AI-based dynamic command generation
+            if (!task->ai_prompt[0] || !task->system_metrics[0]) {
+                log_message(LOG_ERROR, "Missing AI prompt or system metrics for task %d", task->id);
+                pthread_mutex_unlock(&scheduler->lock);
+                return false;
+            }
+            
+            // Collect system metrics
             SystemMetrics metrics;
-            init_system_metrics(&metrics); // Khởi tạo metrics trước khi thu thập
+            init_system_metrics(&metrics);
             
             if (!collect_system_metrics(task->system_metrics, &metrics)) {
-                log_message(LOG_ERROR, "Failed to collect system metrics for task %d", task_id);
-                exit_code = -1;
-            } else {
-                // Sử dụng hàm AI mới để tạo lệnh từ AI
-                char *command = ai_generate_command(&metrics, task->ai_prompt);
-                
-                if (!command || strlen(command) == 0) {
-                    log_message(LOG_ERROR, "Failed to generate AI command for task %d", task_id);
-                    if (command) free(command);
-                    exit_code = -1;
-                } else {
-                    // Ghi log lệnh được tạo ra
-                    log_message(LOG_INFO, "AI generated command for task %d: %s", task_id, command);
-                    
-                    // Kiểm tra và cải thiện lệnh để đảm bảo thông báo hoạt động
-                    if (strstr(command, "notify-send") != NULL) {
-                        // Lệnh này đã có notify-send từ AI - thêm wrapper đơn giản
-                        // để tự động xử lý trường hợp không có notify-send
-                        char *modified_command = malloc(strlen(command) * 2 + 256);
-                        
-                        if (modified_command) {
-                            // Thêm kiểm tra notify-send với fallback echo đơn giản
-                            sprintf(modified_command, 
-                                "if command -v notify-send >/dev/null 2>&1; then %s; else echo \"NOTIFY: Task %d (%s) notification\"; fi",
-                                command, task_id, task->name);
-                            
-                            log_message(LOG_INFO, "Added notify-send compatibility wrapper for task %d", task_id);
-                            
-                            // Thực thi lệnh đã sửa đổi trực tiếp
-                            run_command_with_timeout(
-                                modified_command,
-                                task->working_dir[0] ? task->working_dir : NULL,
-                                task->max_runtime,
-                                &exit_code
-                            );
-                            
-                            // Force exit code to 0 for notification commands
-                            exit_code = 0;
-                            free(modified_command);
-                        } else {
-                            // Nếu không thể cấp phát bộ nhớ, thực thi lệnh gốc
-                            log_message(LOG_WARNING, "Could not create wrapper, executing original command");
-                            run_command_with_timeout(
-                                command,
-                                task->working_dir[0] ? task->working_dir : NULL,
-                                task->max_runtime,
-                                &exit_code
-                            );
-                        }
-                    } else {
-                        // Thực thi lệnh gốc nếu không có notify-send
-                        run_command_with_timeout(
-                            command,
-                            task->working_dir[0] ? task->working_dir : NULL,
-                            task->max_runtime,
-                            &exit_code
-                        );
-                    }
-                    
-                    // Cập nhật trạng thái thực thi vào task
-                    task_mark_executed(task, exit_code);
-                    
-                    // Giải phóng lệnh
-                    free(command);
-                }
+                log_message(LOG_ERROR, "Failed to collect system metrics for task %d", task->id);
+                pthread_mutex_unlock(&scheduler->lock);
+                return false;
             }
+            
+            // Generate command based on metrics and prompt
+            char *cmd = ai_generate_command(&metrics, task->ai_prompt);
+            if (!cmd) {
+                log_message(LOG_ERROR, "Failed to generate command for task %d", task->id);
+                pthread_mutex_unlock(&scheduler->lock);
+                return false;
+            }
+            
+            log_message(LOG_INFO, "AI generated command: %s", cmd);
+            
+            // Execute the generated command
+            success = run_command_with_timeout(cmd, working_dir, task->max_runtime, &exit_code);
+            
+            free(cmd);
+            break;
         }
-    } else {
-        // Execute the command
-        result = run_command_with_timeout(
-            task->command,
-            task->working_dir[0] ? task->working_dir : NULL,
-            task->max_runtime,
-            &exit_code
-        );
         
-        // Update task execution status
-        task_mark_executed(task, exit_code);
+        default:
+            log_message(LOG_ERROR, "Unknown execution mode for task %d", task->id);
+            pthread_mutex_unlock(&scheduler->lock);
+            return false;
     }
     
-    pthread_mutex_unlock(&scheduler->lock);
+    // Update task information
+    if (success) {
+        log_message(LOG_INFO, "Task %d (%s) executed successfully with exit code %d", 
+                  task->id, task->name, exit_code);
+                        } else {
+        log_message(LOG_ERROR, "Failed to execute task %d (%s)", task->id, task->name);
+    }
+    
+    // Update task execution statistics
+    task_mark_executed(&scheduler->tasks[idx], exit_code);
+    
+    // Send email notification for successful execution
+    if (success && exit_code == 0) {
+        // Send email in a non-blocking way
+        if (!email_send_task_notification(&scheduler->tasks[idx], exit_code)) {
+            log_message(LOG_INFO, "Email notification not sent for task %d", task->id);
+        }
+    }
     
     // Update in database
-    if (!db_update_task(task)) {
-        log_message(LOG_ERROR, "Failed to update task in database after execution");
-    }
+    db_update_task(&scheduler->tasks[idx]);
     
-    // Log execution result
-    if (exit_code == 0) {
-        log_message(LOG_INFO, "Task executed: ID=%d, Name=%s, Exit code=%d", 
-                 task->id, task->name, task->exit_code);
-        result = true;
-    } else {
-        log_message(LOG_INFO, "Task executed with errors: ID=%d, Name=%s, Exit code=%d", 
-                 task->id, task->name, task->exit_code);
-        result = false;
-    }
-    
-    return result;
+    pthread_mutex_unlock(&scheduler->lock);
+    return success;
 }
 
 bool scheduler_sync(Scheduler *scheduler) {

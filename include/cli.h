@@ -106,6 +106,14 @@ void cli_convert_to_script(int argc, char *argv[]);
 void cli_convert_to_command(int argc, char *argv[]);
 
 /**
+ * CLI commands for email configuration
+ */
+void cli_set_email_config(int argc, char *argv[]);
+void cli_enable_email(int argc, char *argv[]);
+void cli_disable_email(int argc, char *argv[]);
+void cli_show_email_config(int argc, char *argv[]);
+
+/**
  * Process a command line
  * 
  * @param argc Argument count

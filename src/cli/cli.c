@@ -4,6 +4,7 @@
 #include "../../include/utils.h"
 #include "../../include/db.h"
 #include "../../include/ai.h"
+#include "../../include/email.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -277,6 +278,14 @@ void cli_process_command(int argc, char *argv[]) {
         cli_set_api_key(argc, argv);
     } else if (strcmp(command, "view-api-key") == 0) {
         cli_view_api_key(argc, argv);
+    } else if (strcmp(command, "set-email-config") == 0) {
+        cli_set_email_config(argc, argv);
+    } else if (strcmp(command, "enable-email") == 0) {
+        cli_enable_email(argc, argv);
+    } else if (strcmp(command, "disable-email") == 0) {
+        cli_disable_email(argc, argv);
+    } else if (strcmp(command, "show-email-config") == 0) {
+        cli_show_email_config(argc, argv);
     } else {
         printf("Unknown command: %s\n", command);
         cli_help(argc, argv);
@@ -1437,6 +1446,10 @@ void cli_help(int argc, char *argv[]) {
     printf("  %s to-ai <task_id> <ai_prompt> <system_metrics> : Convert task to AI-Dynamic mode\n", argv[0]);
     printf("  %s set-api-key <api_key> : Set DeepSeek API key in config file\n", argv[0]);
     printf("  %s view-api-key     : View DeepSeek API key configuration\n", argv[0]);
+    printf("  %s set-email-config <email_address> <email_password> <smtp_server> <smtp_port> : Set email configuration\n", argv[0]);
+    printf("  %s enable-email     : Enable email notifications\n", argv[0]);
+    printf("  %s disable-email    : Disable email notifications\n", argv[0]);
+    printf("  %s show-email-config : Show current email configuration\n", argv[0]);
     printf("  %s help              : Show this help message\n", argv[0]);
     
     printf("\nCron Format Guide:\n");
@@ -1839,5 +1852,161 @@ void cli_create_ai_task_with_agent(int argc, char *argv[]) {
         printf("Next run: %s\n", next_run);
     } else {
         printf("Task is manually scheduled\n");
+    }
+}
+
+/**
+ * Set email configuration from command line
+ */
+void cli_set_email_config(int argc, char *argv[]) {
+    // Thực hiện debug để xem thứ tự đối số
+    printf("Debug - Arguments count: %d\n", argc);
+    for (int i = 0; i < argc; i++) {
+        printf("Debug - Argument %d: '%s'\n", i, argv[i]);
+    }
+    
+    // Trong CLI, argv[0] là tên chương trình, argv[1] là lệnh
+    // Đảm bảo đủ đối số (tên chương trình + lệnh + 4 tham số)
+    if (argc < 6) {
+        printf("Usage: %s set-email-config <email_address> <email_password> <smtp_server> <smtp_port>\n", argv[0]);
+        printf("Example: %s set-email-config example@gmail.com \"app_password\" smtp.gmail.com 587\n", argv[0]);
+        return;
+    }
+    
+    // Trong CLI, tham số bắt đầu từ argv[2] vì argv[1] là lệnh "set-email-config"
+    const char *email_address = argv[2];
+    const char *email_password = argv[3];
+    const char *smtp_server = argv[4];
+    const char *smtp_port_str = argv[5];
+    
+    printf("Debug - Processing arguments:\n");
+    printf("  email_address: '%s'\n", email_address);
+    printf("  email_password: '%s'\n", email_password);
+    printf("  smtp_server: '%s'\n", smtp_server);
+    printf("  smtp_port_str: '%s'\n", smtp_port_str);
+    
+    // Chuyển đổi cổng thành số
+    int smtp_port = atoi(smtp_port_str);
+    printf("Debug - Parsed port: %d from '%s'\n", smtp_port, smtp_port_str);
+    
+    if (smtp_port <= 0) {
+        printf("Invalid SMTP port: %s\n", smtp_port_str);
+        return;
+    }
+    
+    if (email_update_config(email_address, email_password, smtp_server, smtp_port, NULL)) {
+        printf("Email configuration updated successfully!\n");
+        printf("Email notifications are now configured with:\n");
+        printf("  - Email address: %s\n", email_address);
+        printf("  - SMTP server: %s:%d\n", smtp_server, smtp_port);
+        printf("Note: To enable email notifications, use 'enable-email' command\n");
+    } else {
+        printf("Failed to update email configuration\n");
+    }
+}
+
+/**
+ * Enable email notifications
+ */
+void cli_enable_email(int argc, char *argv[]) {
+    // Debug để kiểm tra đối số
+    printf("Debug - cli_enable_email: Arguments count: %d\n", argc);
+    for (int i = 0; i < argc; i++) {
+        printf("Debug - cli_enable_email: Argument %d: '%s'\n", i, argv[i]);
+    }
+    
+    // Đảm bảo số đối số phù hợp
+    if (argc != 2) {
+        printf("Usage: %s enable-email\n", argv[0]);
+        printf("Enable email notifications for successful task executions\n");
+        return;
+    }
+    
+    // Check if email is configured
+    EmailConfig config;
+    if (!email_get_config(&config)) {
+        printf("Email not properly configured. Please use set-email-config first.\n");
+        return;
+    }
+    
+    printf("Debug - cli_enable_email: Current config - email_address='%s', smtp_server='%s', smtp_port=%d\n", 
+           config.email_address, config.smtp_server, config.smtp_port);
+    
+    if (strlen(config.email_address) == 0 || 
+        strlen(config.email_password) == 0 || 
+        strlen(config.smtp_server) == 0 || 
+        config.smtp_port <= 0) {
+        printf("Email configuration is incomplete. Please use set-email-config first.\n");
+        return;
+    }
+    
+    printf("Enabling email notifications...\n");
+    if (email_set_enabled(true, NULL)) {
+        printf("Email notifications enabled!\n");
+        printf("You will receive email notifications at %s when tasks complete successfully.\n", 
+               config.email_address);
+    } else {
+        printf("Failed to enable email notifications\n");
+    }
+}
+
+/**
+ * Disable email notifications
+ */
+void cli_disable_email(int argc, char *argv[]) {
+    // Debug để kiểm tra đối số
+    printf("Debug - cli_disable_email: Arguments count: %d\n", argc);
+    for (int i = 0; i < argc; i++) {
+        printf("Debug - cli_disable_email: Argument %d: '%s'\n", i, argv[i]);
+    }
+    
+    // Đảm bảo số đối số phù hợp
+    if (argc != 2) {
+        printf("Usage: %s disable-email\n", argv[0]);
+        printf("Disable email notifications for task executions\n");
+        return;
+    }
+    
+    printf("Disabling email notifications...\n");
+    if (email_set_enabled(false, NULL)) {
+        printf("Email notifications disabled\n");
+    } else {
+        printf("Failed to disable email notifications\n");
+    }
+}
+
+/**
+ * Show current email configuration
+ */
+void cli_show_email_config(int argc, char *argv[]) {
+    (void)argv; // Unused
+    
+    if (argc > 1) {
+        printf("Usage: show-email-config\n");
+        printf("Show current email notification settings\n");
+        return;
+    }
+    
+    EmailConfig config;
+    if (!email_get_config(&config)) {
+        printf("Could not retrieve email configuration\n");
+        return;
+    }
+    
+    printf("Email Configuration:\n");
+    printf("  - Email Address: %s\n", config.email_address[0] ? config.email_address : "(not set)");
+    printf("  - SMTP Server: %s\n", config.smtp_server[0] ? config.smtp_server : "(not set)");
+    printf("  - SMTP Port: %d\n", config.smtp_port);
+    printf("  - Notifications: %s\n", config.email_enabled ? "Enabled" : "Disabled");
+    
+    // Check for incomplete configuration
+    if (!config.email_enabled) {
+        printf("\nTo enable email notifications, use the 'enable-email' command\n");
+    } else if (strlen(config.email_address) == 0 || 
+               strlen(config.email_password) == 0 || 
+               strlen(config.smtp_server) == 0 || 
+               config.smtp_port <= 0) {
+        printf("\nWarning: Email configuration is incomplete.\n");
+        printf("Please use set-email-config to complete the configuration.\n");
     }
 }
