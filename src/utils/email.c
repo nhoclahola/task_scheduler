@@ -542,13 +542,6 @@ bool email_send_task_notification(const Task *task, int exit_code) {
         return false;
     }
     
-    // Only send notification if task was successful
-    if (exit_code != 0) {
-        log_message(LOG_INFO, "Task %d (%s) failed with exit code %d, not sending email notification",
-                   task->id, task->name, exit_code);
-        return false;
-    }
-
     // Get recipient email - use recipient_email if set, otherwise use sender address
     const char *recipient = email_config.recipient_email[0] != '\0' ? 
                             email_config.recipient_email : 
@@ -579,8 +572,13 @@ bool email_send_task_notification(const Task *task, int exit_code) {
     
     // Create email headers and body
     char subject[256];
-    snprintf(subject, sizeof(subject), "Task Scheduler: Task %d (%s) executed successfully", 
-             task->id, task->name);
+    if (exit_code == 0) {
+        snprintf(subject, sizeof(subject), "Task Scheduler: Task %d (%s) executed successfully", 
+                task->id, task->name);
+    } else {
+        snprintf(subject, sizeof(subject), "Task Scheduler: Task %d (%s) execution completed with exit code %d", 
+                task->id, task->name, exit_code);
+    }
     
     char from_header[512];
     snprintf(from_header, sizeof(from_header), "From: Task Scheduler <%s>", email_config.email_address);
@@ -605,13 +603,14 @@ bool email_send_task_notification(const Task *task, int exit_code) {
              "Task ID: %d\n"
              "Task Name: %s\n"
              "Execution Time: %s\n"
-             "Exit Code: %d (Success)\n"
+             "Exit Code: %d (%s)\n"
              "Next Scheduled Run: %s\n\n"
              "Task Details:\n"
              "Command: %s\n"
              "Working Directory: %s\n\n"
              "This is an automated message from Task Scheduler.",
              task->id, task->name, last_run_time_str, exit_code, 
+             exit_code == 0 ? "Success" : "Failed", 
              next_run_time_str, task->command, task->working_dir);
     
     // Combined message (headers + body)

@@ -493,21 +493,21 @@ bool scheduler_execute_task(Scheduler *scheduler, int task_id) {
     if (success) {
         log_message(LOG_INFO, "Task %d (%s) executed successfully with exit code %d", 
                   task->id, task->name, exit_code);
-                        } else {
+    } else {
         log_message(LOG_ERROR, "Failed to execute task %d (%s)", task->id, task->name);
     }
     
     // Update task execution statistics
     task_mark_executed(&scheduler->tasks[idx], exit_code);
-    
-    // Send email notification for successful execution
-    if (success && exit_code == 0) {
+
+    // Send email notification for task execution, regardless of exit_code
+    if (success) {
         // Send email in a non-blocking way
         if (!email_send_task_notification(&scheduler->tasks[idx], exit_code)) {
             log_message(LOG_INFO, "Email notification not sent for task %d", task->id);
         }
     }
-    
+
     // Update in database
     db_update_task(&scheduler->tasks[idx]);
     
@@ -826,13 +826,13 @@ static void* scheduler_thread_func(void *arg) {
                 if (task->exit_code == 0) {
                     log_message(LOG_INFO, "Task executed successfully: ID=%d, Name=%s, Exit code=0",
                            original_task->id, original_task->name);
-                           
-                    // Gửi email thông báo cho task thành công
-                    email_send_task_notification(original_task, original_task->exit_code);
                 } else {
                     log_message(LOG_INFO, "Task executed with errors: ID=%d, Name=%s, Exit code=%d",
                            original_task->id, original_task->name, original_task->exit_code);
                 }
+
+                // Gửi email thông báo cho task bất kể thành công hay thất bại
+                email_send_task_notification(original_task, original_task->exit_code);
                 
                 // Relock for next iteration
                 pthread_mutex_lock(&scheduler->lock);
