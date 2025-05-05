@@ -46,3 +46,4 @@ data/
 .idea/
 *.swp
 *~ 
+.cursor/rules/file_management.mdc
