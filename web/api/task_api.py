@@ -2232,3 +2232,242 @@ class TaskAPI:
                 return True  # Xem như xóa thành công nếu task không tồn tại
         
         return success
+
+    def get_email_config(self):
+        """Lấy cấu hình email từ backend"""
+        if self.simulation_mode:
+            # Trả về dữ liệu mẫu trong chế độ giả lập
+            return {
+                'smtp_server': 'smtp.example.com',
+                'smtp_port': 587,
+                'email_address': 'user@example.com',
+                'password': '********',
+                'from_address': 'taskscheduler@example.com',
+                'recipient_email': 'admin@example.com',
+                'enabled': False,
+                'notify_success': False,
+                'notify_failure': True
+            }
+        
+        # Gọi lệnh show-email-config
+        exit_code, output = self._run_command("show-email-config")
+        
+        # Kiểm tra kết quả
+        if exit_code != 0:
+            print(f"Error getting email config: {output}")
+            return None
+        
+        # In output để debug
+        print(f"Debug: Email config output: {output}")
+        
+        # Parse output để lấy cấu hình email
+        email_config = {
+            'enabled': False,
+            'notify_success': False,
+            'notify_failure': True,
+            'smtp_server': '',
+            'smtp_port': 587,
+            'email_address': '',
+            'password': '',
+            'from_address': '',
+            'recipient_email': ''
+        }
+        
+        # Phân tích output để lấy các thông tin cấu hình
+        for line in output.split('\n'):
+            line = line.strip()
+            
+            if "Notifications Enabled:" in line:
+                email_config['enabled'] = "Yes" in line
+            
+            elif "Email Address:" in line:
+                email_part = line.split("Email Address:")[1].strip()
+                if email_part and email_part != "(not set)":
+                    email_config['email_address'] = email_part
+                    email_config['from_address'] = email_part
+            
+            elif "SMTP Server:" in line:
+                server_part = line.split("SMTP Server:")[1].strip()
+                if server_part and server_part != "(not set)":
+                    email_config['smtp_server'] = server_part
+            
+            elif "SMTP Port:" in line:
+                port_part = line.split("SMTP Port:")[1].strip()
+                if port_part and port_part.isdigit():
+                    email_config['smtp_port'] = int(port_part)
+            
+            elif "Recipient Email:" in line:
+                recipient_part = line.split("Recipient Email:")[1].strip()
+                if recipient_part and recipient_part != "(not set)":
+                    email_config['recipient_email'] = recipient_part
+            
+            # Các thông báo thành công/thất bại không rõ từ output
+            # Sử dụng giá trị mặc định nếu không tìm thấy
+        
+        # Mật khẩu không được trả về từ backend vì lý do bảo mật
+        email_config['password'] = "********" if email_config['email_address'] else ""
+        
+        # Debug thông tin đã phân tích
+        print(f"Debug: Parsed email config: {email_config}")
+        
+        return email_config
+
+    def set_email_config(self, config):
+        """Cập nhật cấu hình email"""
+        if self.simulation_mode:
+            return True
+        
+        # Xây dựng lệnh config-email
+        cmd_parts = ["config-email"]
+        
+        # Thêm thông tin server nếu có
+        if config.get('smtp_server'):
+            cmd_parts.append("-s")
+            cmd_parts.append(f'"{config["smtp_server"]}"')
+        
+        # Thêm thông tin port nếu có
+        if config.get('smtp_port'):
+            cmd_parts.append("-p")
+            cmd_parts.append(str(config["smtp_port"]))
+        
+        # Thêm thông tin username nếu có
+        if config.get('email_address'):
+            cmd_parts.append("-u")
+            cmd_parts.append(f'"{config["email_address"]}"')
+        
+        # Thêm thông tin password nếu có và không phải là placeholder
+        if config.get('password') and config['password'] != "********":
+            cmd_parts.append("-w")
+            cmd_parts.append(f'"{config["password"]}"')
+        
+        # Thêm thông tin from_address nếu có
+        if config.get('from_address'):
+            cmd_parts.append("-f")
+            cmd_parts.append(f'"{config["from_address"]}"')
+        
+        # Thêm thông tin recipient nếu có
+        if config.get('recipient_email'):
+            cmd_parts.append("-r")
+            cmd_parts.append(f'"{config["recipient_email"]}"')
+        
+        # Thực thi lệnh
+        exit_code, output = self._run_command(*cmd_parts)
+        
+        if exit_code != 0:
+            print(f"Error setting email config: {output}")
+            return False
+        
+        # Cập nhật trạng thái thông báo
+        if 'enabled' in config:
+            if config['enabled']:
+                exit_code, output = self._run_command("email-enable")
+            else:
+                exit_code, output = self._run_command("email-disable")
+            
+            if exit_code != 0:
+                print(f"Error setting email notification status: {output}")
+                return False
+        
+        # Cập nhật thiết lập thông báo thành công
+        if 'notify_success' in config:
+            if config['notify_success']:
+                exit_code, output = self._run_command("email-notify-success", "1")
+            else:
+                exit_code, output = self._run_command("email-notify-success", "0")
+            
+            if exit_code != 0:
+                print(f"Error setting success notification: {output}")
+                return False
+        
+        # Cập nhật thiết lập thông báo thất bại
+        if 'notify_failure' in config:
+            if config['notify_failure']:
+                exit_code, output = self._run_command("email-notify-failure", "1")
+            else:
+                exit_code, output = self._run_command("email-notify-failure", "0")
+            
+            if exit_code != 0:
+                print(f"Error setting failure notification: {output}")
+                return False
+        
+        return True
+
+    def update_email_config(self, email_address, email_password, smtp_server, smtp_port, recipient_email=None):
+        """Cập nhật cấu hình email với cú pháp phù hợp với lệnh set-email-config"""
+        if self.simulation_mode:
+            return True
+        
+        # Xây dựng lệnh set-email-config
+        command = ["set-email-config"]
+        
+        # Thứ tự tham số theo lệnh trợ giúp: <email_address> <email_password> <smtp_server> <smtp_port>
+        command.append(f'"{email_address}"')
+        
+        # Password - nếu không cung cấp, sử dụng "" để giữ mật khẩu hiện tại
+        if email_password:
+            command.append(f'"{email_password}"')
+        else:
+            command.append('""')
+        
+        command.append(f'"{smtp_server}"')
+        command.append(str(smtp_port))
+        
+        # Gọi lệnh để cập nhật cấu hình cơ bản
+        exit_code, output = self._run_command(*command)
+        
+        if exit_code != 0:
+            print(f"Error setting email config: {output}")
+            return False
+        
+        # Nếu có recipient_email, cập nhật riêng
+        if recipient_email:
+            if not self.set_recipient_email(recipient_email):
+                print("Warning: Failed to set recipient email address")
+                # Continue anyway since the main config was updated
+        
+        return True
+        
+    def enable_email(self):
+        """Bật thông báo email"""
+        if self.simulation_mode:
+            return True
+        
+        # Gọi lệnh enable-email
+        exit_code, output = self._run_command("enable-email")
+        
+        # Kiểm tra kết quả
+        if exit_code != 0:
+            print(f"Error enabling email notifications: {output}")
+            return False
+        
+        return True
+    
+    def disable_email(self):
+        """Tắt thông báo email"""
+        if self.simulation_mode:
+            return True
+        
+        # Gọi lệnh disable-email
+        exit_code, output = self._run_command("disable-email")
+        
+        # Kiểm tra kết quả
+        if exit_code != 0:
+            print(f"Error disabling email notifications: {output}")
+            return False
+        
+        return True
+    
+    def set_recipient_email(self, recipient_email):
+        """Đặt địa chỉ email người nhận"""
+        if self.simulation_mode:
+            return True
+        
+        # Gọi lệnh set-recipient-email
+        exit_code, output = self._run_command("set-recipient-email", recipient_email)
+        
+        # Kiểm tra kết quả
+        if exit_code != 0:
+            print(f"Error setting recipient email: {output}")
+            return False
+        
+        return True
