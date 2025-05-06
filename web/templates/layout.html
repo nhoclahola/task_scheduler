@@ -68,6 +68,12 @@
                             <i class="fas fa-robot me-1"></i>AI
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'email_settings' %}active{% endif %}" 
+                           href="{{ url_for('email_settings') }}">
+                            <i class="fas fa-envelope me-1"></i>Email
+                        </a>
+                    </li>
                 </ul>
             </div>
         </div>

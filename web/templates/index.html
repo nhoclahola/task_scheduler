@@ -46,6 +46,29 @@
     .action-buttons {
         display: flex;
         justify-content: center;
+        flex-wrap: wrap;
+    }
+    
+    .action-buttons > a,
+    .action-buttons > form {
+        margin-bottom: 4px;
+    }
+    
+    @media (max-width: 991px) {
+        .actions-cell {
+            width: auto;
+            min-width: 200px;
+        }
+    }
+    
+    @media (max-width: 767px) {
+        .task-table-container {
+            overflow-x: auto;
+        }
+        
+        .table {
+            min-width: 800px;
+        }
     }
 </style>
 
@@ -70,13 +93,13 @@
                 <thead class="table-light sticky-top">
                     <tr>
                         <th width="5%">ID</th>
-                        <th width="25%">Tên tác vụ</th>
+                        <th width="20%">Tên tác vụ</th>
                         <th width="8%">Loại</th>
                         <th width="12%">Lịch trình</th>
-                        <th width="10%">Trạng thái</th>
+                        <th width="8%">Trạng thái</th>
                         <th width="15%">Lần chạy cuối</th>
                         <th width="15%">Lần chạy tiếp</th>
-                        <th width="10%">Thao tác</th>
+                        <th width="17%">Thao tác</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -151,7 +174,34 @@
                                         </button>
                                     </form>
                                     {% endif %}
-                                    <div class="dropdown">
+                                    
+                                    <a href="{{ url_for('view_task', task_id=task.id) }}" class="btn btn-sm btn-outline-primary me-1" title="Xem chi tiết">
+                                        <i class="fas fa-eye"></i>
+                                    </a>
+                                    
+                                    <a href="{{ url_for('edit_task', task_id=task.id) }}" class="btn btn-sm btn-outline-info me-1" title="Sửa tác vụ">
+                                        <i class="fas fa-edit"></i>
+                                    </a>
+                                    
+                                    <form action="{{ url_for('toggle_task', task_id=task.id) }}" method="POST" class="me-1">
+                                        <button type="submit" class="btn btn-sm btn-outline-warning" title="{% if task.enabled %}Tắt{% else %}Bật{% endif %} tác vụ">
+                                            <i class="fas {% if task.enabled %}fa-pause{% else %}fa-play{% endif %}"></i>
+                                        </button>
+                                    </form>
+                                    
+                                    {% if task.exec_mode != 2 %}
+                                    <a href="{{ url_for('ai_dynamic_form', task_id=task.id) }}" class="btn btn-sm btn-outline-info me-1" title="Chuyển đổi thành AI Dynamic">
+                                        <i class="fas fa-brain"></i>
+                                    </a>
+                                    {% endif %}
+                                    
+                                    <form action="{{ url_for('delete_task', task_id=task.id) }}" method="POST" class="me-1">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger" title="Xóa tác vụ" onclick="return confirm('Bạn có chắc chắn muốn xóa tác vụ này?')">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </form>
+                                    
+                                    <div class="dropdown d-none">
                                         <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" data-bs-auto-close="true" aria-expanded="false">
                                             <i class="fas fa-ellipsis-v"></i>
                                         </button>

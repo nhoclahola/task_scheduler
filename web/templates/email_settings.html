@@ -1,0 +1,216 @@
+{% extends "layout.html" %}
+
+{% block title %}Cài đặt Email - Task Scheduler{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h5 class="card-title mb-0"><i class="fas fa-envelope me-2"></i>Cài đặt Email</h5>
+            </div>
+            <div class="card-body">
+                <!-- Email Configuration Status -->
+                <div class="alert {% if email_config and email_config.enabled %}alert-success{% else %}alert-warning{% endif %} mb-4">
+                    <h5 class="alert-heading">
+                        <i class="fas {% if email_config and email_config.enabled %}fa-check-circle{% else %}fa-exclamation-triangle{% endif %} me-2"></i>
+                        Trạng thái thông báo Email
+                    </h5>
+                    <p class="mb-0">
+                        {% if email_config and email_config.enabled %}
+                            Thông báo email <strong>đã được bật</strong>. Thông báo sẽ được gửi đến 
+                            <strong>{{ email_config.recipient_email or email_config.email_address }}</strong> 
+                            khi tác vụ hoàn thành.
+                        {% else %}
+                            Thông báo email <strong>đang tắt</strong> hoặc chưa được cấu hình đầy đủ.
+                        {% endif %}
+                    </p>
+                </div>
+
+                <!-- Email Configuration Form -->
+                <form method="POST" action="{{ url_for('update_email_settings') }}" class="needs-validation" novalidate>
+                    <h5 class="mb-3">Cài đặt người gửi</h5>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="email_address" class="form-label">Địa chỉ Email (Người gửi)</label>
+                            <input type="email" class="form-control" id="email_address" name="email_address" 
+                                   value="{{ email_config.email_address }}" required>
+                            <div class="form-text">Địa chỉ email dùng để gửi thông báo</div>
+                            <div class="invalid-feedback">Vui lòng nhập địa chỉ email hợp lệ</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="email_password" class="form-label">Mật khẩu Email</label>
+                            <input type="password" class="form-control" id="email_password" name="email_password"
+                                   {% if not email_config.email_address %}required{% endif %}>
+                            <div class="form-text">
+                                {% if email_config.email_address %}
+                                    Để trống để giữ mật khẩu hiện tại
+                                {% else %}
+                                    Mật khẩu cho tài khoản email người gửi
+                                {% endif %}
+                            </div>
+                            <div class="invalid-feedback">Vui lòng nhập mật khẩu email</div>
+                        </div>
+                    </div>
+
+                    <h5 class="mb-3">Cài đặt máy chủ SMTP</h5>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="smtp_server" class="form-label">Máy chủ SMTP</label>
+                            <input type="text" class="form-control" id="smtp_server" name="smtp_server" 
+                                   value="{{ email_config.smtp_server }}" required>
+                            <div class="form-text">Ví dụ: smtp.gmail.com</div>
+                            <div class="invalid-feedback">Vui lòng nhập máy chủ SMTP</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="smtp_port" class="form-label">Cổng SMTP</label>
+                            <input type="number" class="form-control" id="smtp_port" name="smtp_port" 
+                                   value="{{ email_config.smtp_port or 587 }}" required>
+                            <div class="form-text">Cổng phổ biến: 587 (TLS) hoặc 465 (SSL)</div>
+                            <div class="invalid-feedback">Vui lòng nhập số cổng hợp lệ</div>
+                        </div>
+                    </div>
+
+                    <h5 class="mb-3">Cài đặt người nhận</h5>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="recipient_email" class="form-label">Địa chỉ Email người nhận</label>
+                            <input type="email" class="form-control" id="recipient_email" name="recipient_email"
+                                   value="{{ email_config.recipient_email }}">
+                            <div class="form-text">Nếu khác với người gửi. Để trống nếu muốn sử dụng địa chỉ người gửi.</div>
+                        </div>
+                    </div>
+
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-save me-1"></i>Lưu cài đặt
+                        </button>
+                    </div>
+                </form>
+
+                <hr class="my-4">
+
+                <!-- Enable/Disable Email Notifications -->
+                <div class="row">
+                    <div class="col-md-12">
+                        <h5>Bật/Tắt thông báo</h5>
+                        <p>Bật hoặc tắt thông báo qua email.</p>
+                        
+                        <div class="d-flex gap-2">
+                            {% if not email_config.enabled %}
+                            <form method="POST" action="{{ url_for('toggle_email_notifications', action='enable') }}">
+                                <button type="submit" class="btn btn-success" {% if not email_config or not email_config.email_address or not email_config.smtp_server %}disabled{% endif %}>
+                                    <i class="fas fa-bell me-1"></i>Bật thông báo
+                                </button>
+                            </form>
+                            {% else %}
+                            <form method="POST" action="{{ url_for('toggle_email_notifications', action='disable') }}">
+                                <button type="submit" class="btn btn-danger">
+                                    <i class="fas fa-bell-slash me-1"></i>Tắt thông báo
+                                </button>
+                            </form>
+                            {% endif %}
+                        </div>
+                        
+                        {% if email_config.enabled %}
+                        <div class="alert alert-success mt-3">
+                            <i class="fas fa-check-circle me-2"></i>
+                            Thông báo email hiện đang <strong>bật</strong>.
+                        </div>
+                        {% else %}
+                        <div class="alert alert-warning mt-3">
+                            <i class="fas fa-bell-slash me-2"></i>
+                            Thông báo email hiện đang <strong>tắt</strong>.
+                            {% if not email_config or not email_config.email_address or not email_config.smtp_server %}
+                            <div class="text-danger mt-2">
+                                <i class="fas fa-info-circle me-1"></i>Bạn phải cấu hình cài đặt email trước khi có thể bật thông báo.
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <hr class="my-4">
+                
+                <!-- Help Information -->
+                <div class="row">
+                    <div class="col-md-12">
+                        <h5>Trợ giúp</h5>
+                        <div class="accordion" id="emailHelpAccordion">
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingOne">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" 
+                                            data-bs-target="#collapseOne" aria-expanded="false" aria-controls="collapseOne">
+                                        Sử dụng Gmail
+                                    </button>
+                                </h2>
+                                <div id="collapseOne" class="accordion-collapse collapse" aria-labelledby="headingOne" 
+                                     data-bs-parent="#emailHelpAccordion">
+                                    <div class="accordion-body">
+                                        <p>Để sử dụng Gmail làm máy chủ SMTP:</p>
+                                        <ol>
+                                            <li>Đặt máy chủ SMTP thành <code>smtp.gmail.com</code></li>
+                                            <li>Đặt cổng SMTP thành <code>587</code></li>
+                                            <li>Bạn cần sử dụng "Mật khẩu ứng dụng" thay vì mật khẩu Gmail thông thường</li>
+                                            <li>Để tạo Mật khẩu ứng dụng:
+                                                <ul>
+                                                    <li>Truy cập vào Tài khoản Google → Bảo mật → Xác minh 2 bước</li>
+                                                    <li>Cuộn xuống mục "Mật khẩu ứng dụng"</li>
+                                                    <li>Tạo mật khẩu ứng dụng mới cho "Mail" và "Khác (Tên tùy chỉnh)"</li>
+                                                </ul>
+                                            </li>
+                                        </ol>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingTwo">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" 
+                                            data-bs-target="#collapseTwo" aria-expanded="false" aria-controls="collapseTwo">
+                                        Xử lý sự cố
+                                    </button>
+                                </h2>
+                                <div id="collapseTwo" class="accordion-collapse collapse" aria-labelledby="headingTwo" 
+                                     data-bs-parent="#emailHelpAccordion">
+                                    <div class="accordion-body">
+                                        <p>Nếu bạn gặp vấn đề với thông báo email:</p>
+                                        <ul>
+                                            <li>Kiểm tra xem email và mật khẩu của bạn có chính xác không</li>
+                                            <li>Xác minh máy chủ SMTP và cổng</li>
+                                            <li>Đối với Gmail, đảm bảo bạn đang sử dụng Mật khẩu ứng dụng, không phải mật khẩu thông thường</li>
+                                            <li>Kiểm tra xem nhà cung cấp email của bạn có yêu cầu cài đặt bảo mật bổ sung không</li>
+                                            <li>Một số nhà cung cấp có thể chặn email được gửi từ dịch vụ tự động</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Form validation
+    (function() {
+        'use strict';
+        window.addEventListener('load', function() {
+            var forms = document.getElementsByClassName('needs-validation');
+            Array.prototype.filter.call(forms, function(form) {
+                form.addEventListener('submit', function(event) {
+                    if (form.checkValidity() === false) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }
+                    form.classList.add('was-validated');
+                }, false);
+            });
+        }, false);
+    })();
+</script>
+{% endblock %} 

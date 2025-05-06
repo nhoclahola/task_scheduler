@@ -196,9 +196,44 @@ def create_task():
 # Xem chi tiết tác vụ
 @app.route('/task/<int:task_id>')
 def view_task(task_id):
-    task = task_api.get_task(task_id)
-    if task:
-        # Thêm các thông tin định dạng vào task
+    """Xem chi tiết tác vụ"""
+    try:
+        print(f"Debug: Starting view_task for task_id={task_id}")
+        
+        # Lấy thông tin task, bao gồm cả refresh để luôn có dữ liệu mới nhất
+        task = task_api.get_task(task_id, force_refresh=True)
+        
+        # Debug log sau khi nhận response từ API
+        print(f"Debug: Task data received: {task is not None}")
+        if task:
+            print(f"Debug: Task {task_id} info - Name: {task.get('name')}, Enabled: {task.get('enabled')}, Exec mode: {task.get('exec_mode')}")
+            if 'cron_expr' in task:
+                print(f"Debug: Schedule info - cron_expr: {task.get('cron_expr')}")
+            if 'cron_expression' in task:
+                print(f"Debug: Cron expression: {task.get('cron_expression')}")
+            if 'script_content' in task:
+                script_length = len(task.get('script_content', ''))
+                print(f"Debug: Script content length: {script_length} characters")
+        else:
+            print(f"Debug: No task data received from API for task_id={task_id}")
+        
+        if not task:
+            # Thử lấy danh sách tác vụ để xem task_id có tồn tại không
+            all_tasks = task_api.get_all_tasks()
+            task_ids = [t.get('id') for t in all_tasks]
+            
+            if task_id in task_ids:
+                error_msg = f'Tác vụ {task_id} tồn tại nhưng không thể tải thông tin chi tiết. Hãy thử lại sau.'
+                print(f"Debug: {error_msg}")
+                flash(error_msg, 'error')
+            else:
+                error_msg = f'Không tìm thấy tác vụ với ID {task_id}!'
+                print(f"Debug: {error_msg}")
+                flash(error_msg, 'error')
+                
+            return redirect(url_for('index'))
+            
+        # Thêm các thông tin hiển thị
         task['creation_time_fmt'] = format_timestamp(task.get('creation_time', 0))
         task['next_run_time_fmt'] = format_timestamp(task.get('next_run_time', 0))
         task['last_run_time_fmt'] = format_timestamp(task.get('last_run_time', 0))
@@ -209,7 +244,23 @@ def view_task(task_id):
         task['dependency_behavior_name'] = get_dependency_behavior_name(task.get('dep_behavior', 0))
         task['exec_mode_name'] = get_exec_mode_name(task.get('exec_mode', 0))
         
-        # Xử lý mã kết quả exit_code
+        # Định dạng cron expression để hiển thị
+        if task.get('schedule_type') == 2 and 'cron_expression' in task:
+            task['cron_formatted'] = f"Cron: {task.get('cron_expression')}"
+        elif 'cron_expr' in task and task.get('cron_expr', '').startswith('Cron:'):
+            cron_expr = task.get('cron_expr')
+            task['cron_formatted'] = cron_expr
+            # Tạo cron_expression nếu không có
+            if 'cron_expression' not in task:
+                # Trích xuất phần sau "Cron:"
+                cron_parts = cron_expr.split('Cron:', 1)
+                if len(cron_parts) > 1:
+                    task['cron_expression'] = cron_parts[1].strip()
+                    
+            # Đảm bảo schedule_type được đặt đúng
+            task['schedule_type'] = 2
+        
+        # Mô tả trạng thái dựa trên exit_code
         exit_code = task.get('exit_code', -1)
         if exit_code == 0:
             task['exit_code_desc'] = f"Thành công ({exit_code})"
@@ -221,61 +272,48 @@ def view_task(task_id):
         else:
             task['exit_code_desc'] = f"Lỗi ({exit_code})"
         
-        # Lấy danh sách tên của các tác vụ phụ thuộc (nếu có)
+        # Lấy danh sách tên của các task phụ thuộc
         dependency_names = {}
         if task.get('dependencies'):
             for dep_id in task['dependencies']:
-                dep_task = task_api.get_task(dep_id)
+                # Không cần force_refresh ở đây vì chỉ cần tên
+                dep_task = task_api.get_task(dep_id, force_refresh=False)
                 if dep_task:
                     dependency_names[dep_id] = dep_task['name']
                 else:
                     dependency_names[dep_id] = f"Tác vụ {dep_id}"
         
-        # Lấy nội dung script nếu là task dùng script
+        # Lấy nội dung script nếu là task script
         if task.get('exec_mode') == 1:
             # Kiểm tra xem đã có script_content chưa
-            if 'script_content' not in task or not task['script_content']:
-                # Tìm kiếm trong _last_view_output nếu có
-                if hasattr(task_api, '_last_view_output') and task_api._last_view_output:
-                    # Trích xuất script content từ output trước đó
-                    try:
-                        lines = task_api._last_view_output.split('\n')
-                        script_content = []
-                        in_script_section = False
-                        
-                        for line in lines:
-                            if line.strip() == "Script:":
-                                in_script_section = True
-                                continue
-                            elif in_script_section and (line.strip().startswith("Schedule:") or 
-                                                      line.strip().startswith("Working Directory:") or
-                                                      line.strip().startswith("Max Runtime:")):
-                                in_script_section = False
-                                break
-                            elif in_script_section:
-                                script_content.append(line)
-                        
-                        if script_content:
-                            task['script_content'] = '\n'.join(script_content).strip()
-                            print(f"Successfully extracted script content from cached output")
-                    except Exception as e:
-                        print(f"Error extracting script from cached output: {e}")
-                
-                # Nếu không có script_content, lấy từ API
-                if 'script_content' not in task or not task['script_content']:
-                    script_content = task_api.get_script_content(task_id)
-                    if script_content:
-                        task['script_content'] = script_content
-                        
+            if 'script_content' not in task or not task['script_content'] or len(task['script_content']) < 20:
+                # Lấy script content từ API
+                print(f"Debug: Fetching script content for task {task_id} via separate call")
+                script_content = task_api.get_script_content(task_id)
+                if script_content:
+                    task['script_content'] = script_content
+                    print(f"Debug: Script content fetched via separate call, length: {len(script_content)} characters")
+                else:
+                    print(f"Debug: No script content found via separate call for task {task_id}")
+            else:
+                print(f"Debug: Using existing script content, length: {len(task['script_content'])} characters")
+        
+        # Render template với thông tin task
+        print(f"Debug: Rendering template for task {task_id}")
         return render_template('task_detail.html', task=task, dependency_names=dependency_names)
-    else:
-        flash('Không tìm thấy tác vụ với ID này!', 'error')
+        
+    except Exception as e:
+        print(f"Error in view_task: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f'Lỗi khi xem chi tiết tác vụ: {e}', 'error')
         return redirect(url_for('index'))
 
 # Hiển thị form chỉnh sửa tác vụ
 @app.route('/task/<int:task_id>/edit')
 def edit_task(task_id):
-    task = task_api.get_task(task_id)
+    # Sử dụng force_refresh=True để đảm bảo dữ liệu mới nhất
+    task = task_api.get_task(task_id, force_refresh=True)
     if task:
         # Lấy danh sách các tác vụ khác để thiết lập phụ thuộc
         available_tasks = task_api.get_all_tasks()
@@ -287,7 +325,8 @@ def edit_task(task_id):
 # Cập nhật tác vụ
 @app.route('/task/<int:task_id>/update', methods=['POST'])
 def update_task(task_id):
-    task = task_api.get_task(task_id)
+    # Sử dụng force_refresh=True để đảm bảo dữ liệu mới nhất
+    task = task_api.get_task(task_id, force_refresh=True)
     if not task:
         flash('Không tìm thấy tác vụ với ID này!', 'error')
         return redirect(url_for('index'))
@@ -343,7 +382,7 @@ def update_task(task_id):
         dependencies = dependencies[:10]
         
         # Lấy danh sách phụ thuộc hiện tại
-        current_task = task_api.get_task(task_id)
+        current_task = task_api.get_task(task_id, force_refresh=True)
         current_dependencies = current_task.get('dependencies', []) if current_task else []
         
         # Kiểm tra xem có sự thay đổi phụ thuộc không
@@ -366,7 +405,7 @@ def update_task(task_id):
         task_data['dependencies'] = dependencies
     else:
         # Nếu không có phụ thuộc mới, xóa tất cả phụ thuộc hiện tại
-        current_task = task_api.get_task(task_id)
+        current_task = task_api.get_task(task_id, force_refresh=True)
         current_dependencies = current_task.get('dependencies', []) if current_task else []
         
         if current_dependencies:
@@ -388,7 +427,7 @@ def update_task(task_id):
         if behavior != current_behavior:
             behavior_changed = True
             task_api.set_dependency_behavior(task_id, behavior)
-        
+            
         # Không cần lưu dep_behavior vào task_data khi đã cập nhật trực tiếp
     
     # Tạo một bản sao của task_data không chứa dependencies và dep_behavior
@@ -402,7 +441,7 @@ def update_task(task_id):
     # Kiểm tra xem có các trường khác cần cập nhật không
     # Lấy lại current_task nếu cần
     if not current_task:
-        current_task = task_api.get_task(task_id)
+        current_task = task_api.get_task(task_id, force_refresh=True)
     
     # Kiểm tra các trường còn lại ngoài 'id' có thay đổi không
     has_other_changes = False
@@ -434,18 +473,26 @@ def update_task(task_id):
 # Xóa tác vụ
 @app.route('/task/<int:task_id>/delete', methods=['POST'])
 def delete_task(task_id):
-    success = task_api.delete_task(task_id)
-    if success:
-        flash('Tác vụ đã được xóa thành công!', 'success')
-    else:
-        flash('Không thể xóa tác vụ. Vui lòng thử lại!', 'error')
-    return redirect(url_for('index'))
+    """Xóa một tác vụ"""
+    try:
+        task_api = get_task_api()
+        success = task_api.delete_task(task_id)
+        
+        if success:
+            flash('Tác vụ đã được xóa thành công!', 'success')
+        else:
+            flash('Không thể xóa tác vụ. Vui lòng thử lại!', 'error')
+            
+        return redirect(url_for('index'))
+    except Exception as e:
+        flash(f'Lỗi khi xóa tác vụ: {str(e)}', 'error')
+        return redirect(url_for('index'))
 
 # Chạy tác vụ ngay lập tức
 @app.route('/task/<int:task_id>/run', methods=['POST'])
 def run_task(task_id):
-    # Lấy thông tin task trước khi thực thi
-    task = task_api.get_task(task_id)
+    # Lấy thông tin task trước khi thực thi, với force_refresh=True để đảm bảo dữ liệu mới nhất
+    task = task_api.get_task(task_id, force_refresh=True)
     
     # Kiểm tra xem task có tồn tại không
     if not task:
@@ -469,7 +516,8 @@ def run_task(task_id):
 # Bật/tắt tác vụ
 @app.route('/task/<int:task_id>/toggle', methods=['POST'])
 def toggle_task(task_id):
-    task = task_api.get_task(task_id)
+    # Lấy thông tin task với force_refresh=True để đảm bảo dữ liệu mới nhất
+    task = task_api.get_task(task_id, force_refresh=True)
     if not task:
         flash('Không tìm thấy tác vụ với ID này!', 'error')
         return redirect(url_for('index'))
@@ -645,42 +693,59 @@ def server_error(e):
 
 # AI Features Routes
 
-@app.route('/ai')
+@app.route('/ai-dashboard')
 def ai_dashboard():
-    """Trang dashboard cho tính năng AI"""
+    # Lấy API key
     api_key = task_api.get_api_key()
-    has_api_key = api_key is not None and api_key != ""
     
-    # Kiểm tra thêm xem có file config.json không
-    config_path = os.path.join(task_api.data_dir, "config.json")
-    config_exists = os.path.exists(config_path)
+    # Khởi tạo danh sách tác vụ AI trống
+    ai_tasks = []
     
-    # Kết hợp hai điều kiện để xác định API key
-    has_api_key = has_api_key or config_exists
+    # Kiểm tra xem có API key hợp lệ không
+    api_key_valid = api_key and api_key != "CONFIGURED_API_KEY" and len(api_key) > 10
     
-    available_metrics = task_api.get_available_system_metrics()
+    # Chỉ lấy danh sách tác vụ AI nếu có API key hợp lệ
+    if api_key_valid:
+        try:
+            # Lấy tất cả các tác vụ và lọc ra các tác vụ AI Dynamic
+            all_tasks = task_api.get_all_tasks()
+            ai_tasks = [task for task in all_tasks if task.get('exec_mode') == 2]  # 2 = EXEC_AI_DYNAMIC
+            print(f"Found {len(ai_tasks)} AI Dynamic tasks")
+        except Exception as e:
+            print(f"Error fetching AI tasks: {e}")
+            flash("Lỗi khi lấy danh sách tác vụ AI", "error")
     
-    return render_template('ai_dashboard.html', has_api_key=has_api_key, available_metrics=available_metrics)
+    # Lấy danh sách các system metrics có sẵn
+    system_metrics = task_api.get_available_system_metrics()
+    
+    return render_template('ai_dashboard.html', 
+                          api_key=api_key, 
+                          api_key_valid=api_key_valid, 
+                          ai_tasks=ai_tasks,
+                          system_metrics=system_metrics)
 
 @app.route('/ai/set_api_key', methods=['POST'])
 def set_api_key():
-    """Thiết lập API key cho chức năng AI"""
-    api_key = request.form.get('api_key', '')
+    """Cập nhật API key cho DeepSeek"""
+    api_key = request.form.get('api_key', '').strip()
     
-    if api_key:
-        success = task_api.set_api_key(api_key)
-        if success:
-            flash('API key đã được thiết lập thành công!', 'success')
-        else:
-            # Kiểm tra nếu config.json đã được tạo
-            config_path = os.path.join(task_api.data_dir, "config.json")
-            if os.path.exists(config_path):
-                # Nếu file đã tồn tại, có thể backend vẫn hoạt động
-                flash('API key có thể đã được thiết lập mặc dù có lỗi từ backend. Hãy thử sử dụng chức năng AI.', 'warning')
-            else:
-                flash('Không thể thiết lập API key. Vui lòng kiểm tra quyền truy cập thư mục dữ liệu.', 'error')
+    # Debug log
+    print(f"Debug: Processing API key update. Key length: {len(api_key)}")
+    
+    # Kiểm tra API key có rỗng không
+    if not api_key:
+        flash('API key không thể để trống. Vui lòng nhập API key hợp lệ.', 'danger')
+        return redirect(url_for('ai_dashboard'))
+    
+    # Cập nhật API key
+    success = task_api.set_api_key(api_key)
+    
+    if success:
+        print("Debug: API key updated successfully")
+        flash('API key đã được cập nhật thành công.', 'success')
     else:
-        flash('API key không hợp lệ!', 'error')
+        print("Debug: API key update failed")
+        flash('Không thể cập nhật API key. Vui lòng kiểm tra lại.', 'danger')
     
     return redirect(url_for('ai_dashboard'))
 
@@ -699,35 +764,74 @@ def ai_generate_task():
         return redirect(url_for('ai_create_task_form'))
     
     # Kiểm tra xem API key đã được thiết lập chưa
-    try:
-        if not task_api.is_api_key_valid():
-            flash('Vui lòng thiết lập API key của OpenAI trước khi sử dụng tính năng này!', 'error')
-            return redirect(url_for('ai_dashboard'))
-    except AttributeError:
-        # Nếu phương thức is_api_key_valid chưa tồn tại, kiểm tra theo cách khác
-        api_key = task_api.get_api_key()
-        if not api_key:
-            flash('Vui lòng thiết lập API key của OpenAI trước khi sử dụng tính năng này!', 'error')
-            return redirect(url_for('ai_dashboard'))
+    api_key = task_api.get_api_key()
+    if not api_key:
+        flash('Vui lòng thiết lập API key của DeepSeek trước khi sử dụng tính năng này!', 'error')
+        return redirect(url_for('ai_dashboard'))
+    
+    # Hiển thị thông báo đang xử lý cho người dùng
+    flash('Đang xử lý yêu cầu tạo tác vụ... Quá trình này có thể mất từ 15-30 giây.', 'info')
     
     try:
+        print(f"Sending AI task generation request with description: '{description}'")
         result = task_api.ai_generate_task(description)
         
-        if result['success']:
+        if result.get('success'):
             # Kiểm tra xem kết quả có hợp lệ không
             if not result.get('content') or len(result.get('content', '').strip()) < 3:
+                # Log lỗi để debug
+                print(f"Received empty or invalid content from AI: {result}")
+                
                 # Nếu không có nội dung thì thêm lệnh mặc định
-                result['content'] = 'df -h | awk \'NR>1 {print $5,$1}\' | while read size fs; do pct=$(echo $size | cut -d\'%\' -f1); if [ $pct -ge 90 ]; then echo "WARNING: $fs is $size full!"; fi; done'
-                if "ổ đĩa" in description.lower() or "disk" in description.lower():
+                if "disk" in description.lower() or "ổ đĩa" in description.lower():
+                    result['content'] = 'df -h | awk \'NR>1 {print $5,$1}\' | while read size fs; do pct=$(echo $size | cut -d\'%\' -f1); if [ $pct -ge 90 ]; then echo "WARNING: $fs is $size full!"; fi; done'
                     result['suggested_name'] = 'Kiểm tra ổ đĩa'
+                else:
+                    # Tạo script cơ bản dựa trên mô tả
+                    result['content'] = f'''#!/bin/bash
+# Auto-generated script based on: "{description}"
+echo "Executing task: {description}"
+# Add your commands here
+if [ $? -eq 0 ]; then
+  echo "Task completed successfully"
+  exit 0
+else
+  echo "Task failed"
+  exit 1
+fi'''
                     
+                    # Tạo tên gợi ý từ mô tả
+                    words = description.split()
+                    if len(words) > 3:
+                        result['suggested_name'] = "_".join(words[:3]).lower()
+                    else:
+                        result['suggested_name'] = "_".join(words).lower()
+                    
+                    # Loại bỏ ký tự đặc biệt
+                    import re
+                    result['suggested_name'] = re.sub(r'[^a-zA-Z0-9_]', '', result['suggested_name'])
+                    if len(result['suggested_name']) > 30:
+                        result['suggested_name'] = result['suggested_name'][:30]
+                
+                result['is_script'] = True
+                result['schedule_description'] = "Chạy mỗi ngày"
+                
+                # Ghi log 
+                print(f"Using fallback content for AI task: {result['suggested_name']}")
+            
             # Lưu kết quả vào session để hiển thị ở trang xác nhận
             session['ai_generated_task'] = result
             return redirect(url_for('ai_confirm_task'))
         else:
-            flash(f'Không thể tạo tác vụ: {result.get("error", "Lỗi không xác định")}', 'error')
+            error_message = result.get('error', 'Lỗi không xác định')
+            print(f"AI task generation failed: {error_message}")
+            flash(f'Không thể tạo tác vụ: {error_message}', 'error')
             return redirect(url_for('ai_create_task_form'))
     except Exception as e:
+        import traceback
+        # In traceback để debugging
+        traceback.print_exc()
+        print(f"Exception during AI task generation: {str(e)}")
         flash(f'Lỗi xử lý: {str(e)}', 'error')
         return redirect(url_for('ai_create_task_form'))
 
@@ -740,16 +844,23 @@ def ai_confirm_task():
         flash('Không có dữ liệu tác vụ từ AI. Vui lòng tạo lại tác vụ!', 'error')
         return redirect(url_for('ai_create_task_form'))
     
+    # Log dữ liệu task để debug
+    print(f"Task data for confirmation: {task_data.keys()}")
+    
     # Đảm bảo task_data chứa tất cả các field cần thiết
     if 'content' not in task_data or not task_data['content']:
-        # Nếu không có content thì thêm lệnh mặc định kiểm tra ổ đĩa
-        task_data['content'] = 'df -h | awk \'NR>1 {print $5,$1}\' | while read size fs; do pct=$(echo $size | cut -d\'%\' -f1); if [ $pct -ge 90 ]; then echo "WARNING: $fs is $size full!"; fi; done'
+        flash('Nội dung tác vụ không hợp lệ. Vui lòng tạo lại tác vụ!', 'error')
+        return redirect(url_for('ai_create_task_form'))
     
     # Kiểm tra xem có biểu thức cron không
     import re
     
+    # Gán is_cron nếu không có
+    if 'is_cron' not in task_data:
+        task_data['is_cron'] = False
+    
     # Kiểm tra cron trong kết quả trả về
-    if 'cron' in task_data:
+    if 'cron' in task_data and task_data['cron']:
         cron_expr = task_data.get('cron')
         if cron_expr and re.match(r'^\d+\s+\d+\s+\*\s+\*\s+\*$', cron_expr.strip()):
             task_data['is_cron'] = True
@@ -760,20 +871,16 @@ def ai_confirm_task():
     
     # Kiểm tra từ khoá 'Cron Expression' trong output
     raw_output = task_data.get('raw_output', '')
-    if not raw_output and 'is_cron' not in task_data:
-        # Tìm trong schedule_description
-        if 'schedule_description' in task_data:
-            if re.search(r'cron', task_data['schedule_description'].lower()):
-                task_data['is_cron'] = True
-                
-            # Tìm dạng 0 2 * * * trong schedule_description
-            cron_match = re.search(r'(\d+\s+\d+\s+\*\s+\*\s+\*)', task_data['schedule_description'])
-            if cron_match:
-                cron_expr = cron_match.group(1).strip()
-                task_data['is_cron'] = True
-                task_data['cron'] = cron_expr
-                task_data['cron_expression'] = cron_expr
-                task_data['schedule_description'] = f'Cron: {cron_expr}'
+    if raw_output and 'is_cron' not in task_data:
+        # Tìm trong raw_output
+        cron_match = re.search(r'Cron Expression:\s*(\d+\s+\d+\s+\*\s+\*\s+\*)', raw_output)
+        if cron_match:
+            cron_expr = cron_match.group(1).strip()
+            task_data['is_cron'] = True
+            task_data['cron'] = cron_expr
+            task_data['cron_expression'] = cron_expr
+            task_data['schedule_description'] = f'Cron: {cron_expr}'
+            print(f"Extracted cron from raw output: {cron_expr}")
     
     # Chuẩn hóa schedule_description nếu chưa có
     if 'schedule_description' not in task_data or not task_data['schedule_description']:
@@ -785,14 +892,7 @@ def ai_confirm_task():
             interval_minutes = task_data.get('interval_minutes', 60)
             task_data['schedule_description'] = f'Interval: {interval_minutes} phút'
     
-    # Mô tả sao lưu đặc biệt - dựa vào mẫu chung
-    text_values = ' '.join([str(val) for val in task_data.values() if val is not None])
-    if ('2 giờ sáng' in text_values.lower() or '2 giờ' in text_values.lower()) and not task_data.get('is_cron'):
-        task_data['is_cron'] = True
-        task_data['cron'] = '0 2 * * *'
-        task_data['cron_expression'] = '0 2 * * *'
-        task_data['schedule_description'] = 'Cron: 0 2 * * *'
-    
+    # Kiểm tra tên đề xuất
     if 'suggested_name' not in task_data or not task_data['suggested_name']:
         task_data['suggested_name'] = 'Tác vụ tạo bởi AI'
     
@@ -921,6 +1021,108 @@ def convert_to_dynamic():
     else:
         flash('Không thể chuyển đổi tác vụ. Vui lòng thử lại!', 'error')
         return redirect(url_for('ai_dynamic_form', task_id=task_id))
+
+# Email Configuration Routes
+@app.route('/email')
+def email_settings():
+    """Display email configuration settings"""
+    try:
+        email_config = task_api.get_email_config() or {}
+        return render_template('email_settings.html', email_config=email_config)
+    except Exception as e:
+        flash(f'Lỗi khi tải cài đặt email: {str(e)}', 'error')
+        return render_template('email_settings.html', email_config={})
+
+@app.route('/email/update', methods=['POST'])
+def update_email_settings():
+    """Update email configuration"""
+    email_address = request.form.get('email_address', '').strip()
+    email_password = request.form.get('email_password', '').strip()
+    smtp_server = request.form.get('smtp_server', '').strip()
+    smtp_port = request.form.get('smtp_port', 587)
+    recipient_email = request.form.get('recipient_email', '').strip()
+    
+    # Validate inputs
+    if not email_address or not smtp_server:
+        flash('Địa chỉ email và máy chủ SMTP là bắt buộc', 'error')
+        return redirect(url_for('email_settings'))
+    
+    try:
+        smtp_port = int(smtp_port)
+    except ValueError:
+        flash('Số cổng SMTP không hợp lệ', 'error')
+        return redirect(url_for('email_settings'))
+    
+    # Log the parameters (without showing full password)
+    print(f"Debug: Updating email config with: email={email_address}, server={smtp_server}, port={smtp_port}, recipient={recipient_email}")
+    if email_password:
+        print(f"Debug: Password provided (length: {len(email_password)})")
+    else:
+        print("Debug: No new password provided")
+    
+    # If no password provided, check if we already have one configured
+    current_config = task_api.get_email_config() or {}
+    if not email_password and current_config.get('email_address') == email_address:
+        # Get current password from backend
+        result = task_api.update_email_config(
+            email_address,
+            "", # Leave password empty to keep current one
+            smtp_server,
+            smtp_port,
+            recipient_email if recipient_email else None
+        )
+    else:
+        # Use new password
+        result = task_api.update_email_config(
+            email_address,
+            email_password,
+            smtp_server,
+            smtp_port,
+            recipient_email if recipient_email else None
+        )
+    
+    if result:
+        flash('Cài đặt email đã được cập nhật thành công', 'success')
+    else:
+        flash('Không thể cập nhật cài đặt email', 'error')
+    
+    return redirect(url_for('email_settings'))
+
+@app.route('/email/toggle/<action>', methods=['POST'])
+def toggle_email_notifications(action):
+    """Enable or disable email notifications"""
+    if action == 'enable':
+        result = task_api.enable_email()
+        if result:
+            flash('Đã bật thông báo email thành công', 'success')
+        else:
+            flash('Không thể bật thông báo email. Vui lòng đảm bảo cài đặt email của bạn chính xác.', 'error')
+    else:
+        result = task_api.disable_email()
+        if result:
+            flash('Đã tắt thông báo email thành công', 'success')
+        else:
+            flash('Không thể tắt thông báo email', 'error')
+    
+    return redirect(url_for('email_settings'))
+
+@app.route('/email/set-recipient', methods=['POST'])
+def set_recipient_email():
+    """Set recipient email address"""
+    recipient_email = request.form.get('recipient_email', '')
+    
+    if not recipient_email:
+        flash('Địa chỉ email người nhận là bắt buộc', 'error')
+        return redirect(url_for('email_settings'))
+    
+    result = task_api.set_recipient_email(recipient_email)
+    
+    if result:
+        flash('Đã cập nhật email người nhận thành công', 'success')
+    else:
+        flash('Không thể cập nhật email người nhận', 'error')
+    
+    return redirect(url_for('email_settings'))
 
 # Run app
 if __name__ == '__main__':
