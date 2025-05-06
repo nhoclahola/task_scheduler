@@ -475,7 +475,7 @@ def update_task(task_id):
 def delete_task(task_id):
     """Xóa một tác vụ"""
     try:
-        task_api = get_task_api()
+        # Sử dụng biến task_api toàn cục thay vì gọi hàm get_task_api()
         success = task_api.delete_task(task_id)
         
         if success:
