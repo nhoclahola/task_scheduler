@@ -8,6 +8,9 @@
 // Giới hạn tối đa số lượng tác vụ phụ thuộc
 #define MAX_DEPENDENCIES 10
 #define SCRIPT_CONTENT_MAX_LENGTH 4096
+#define TASK_COMMAND_MAX_LENGTH 1024
+#define TASK_SCRIPT_MAX_LENGTH SCRIPT_CONTENT_MAX_LENGTH
+#define TASK_AI_PROMPT_MAX_LENGTH 2048
 
 /**
  * Enum for task frequency types

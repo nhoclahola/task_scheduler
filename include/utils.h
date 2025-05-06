@@ -5,6 +5,9 @@
 #include <time.h>
 #include "ai.h"
 
+// Thêm vào đầu file sau các includes
+#define DEBUG_OUTPUT 1
+
 /**
  * Logging levels
  */

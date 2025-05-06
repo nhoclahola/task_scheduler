@@ -388,7 +388,7 @@ Task* scheduler_get_all_tasks(Scheduler *scheduler, int *count) {
 }
 
 bool scheduler_execute_task(Scheduler *scheduler, int task_id) {
-    if (!scheduler) {
+    if (!scheduler || task_id < 0) {
         return false;
     }
     
@@ -397,8 +397,8 @@ bool scheduler_execute_task(Scheduler *scheduler, int task_id) {
     // Find the task
     int idx = find_task_index(scheduler, task_id);
     if (idx < 0) {
+        log_message(LOG_ERROR, "Task not found for execution: ID=%d", task_id);
         pthread_mutex_unlock(&scheduler->lock);
-        log_message(LOG_ERROR, "Task ID %d not found", task_id);
         return false;
     }
     
@@ -406,53 +406,103 @@ bool scheduler_execute_task(Scheduler *scheduler, int task_id) {
     
     // Check if task is enabled
     if (!task->enabled) {
+        log_message(LOG_WARNING, "Cannot execute disabled task: ID=%d", task_id);
         pthread_mutex_unlock(&scheduler->lock);
-        log_message(LOG_WARNING, "Task %d is disabled", task_id);
         return false;
     }
     
-    // Check dependencies before execution
-    if (task->dependency_count > 0 && !check_dependencies_satisfied(scheduler, task)) {
+    // Check if dependencies are satisfied
+    if (!check_dependencies_satisfied(scheduler, task)) {
+        log_message(LOG_WARNING, "Dependencies not satisfied for task: ID=%d", task_id);
         pthread_mutex_unlock(&scheduler->lock);
-        log_message(LOG_WARNING, "Dependencies not satisfied for task %d", task_id);
         return false;
     }
     
-    // Set up working directory
-    char *working_dir = NULL;
-    if (task->working_dir[0] != '\0') {
-        working_dir = task->working_dir;
+    // Update last run time to now and set next run time based on schedule
+    time_t now = time(NULL);
+    task->last_run_time = now;
+    
+    // Force task recalculation - important to prevent task from running multiple times
+    if (task->schedule_type == SCHEDULE_INTERVAL) {
+        task->next_run_time = now + task->interval;
+    } else if (task->schedule_type == SCHEDULE_CRON) {
+        // Calculate next run time based on cron expression
+        task->next_run_time = now;
+        task_calculate_next_run(task); // This will update next_run_time
+    } else { 
+        // Manual schedule - don't update next_run_time
     }
     
-    // Execute based on mode
-    int exit_code = -1;
-    bool success = false;
+    // Save task working directory for execution
+    char working_dir[256] = "";
+    if (task->working_dir[0]) {
+        safe_strcpy(working_dir, task->working_dir, sizeof(working_dir));
+    }
+    
+    // Save task ID and execution mode to use after unlocking
+    int task_exec_mode = task->exec_mode;
+    int task_max_runtime = task->max_runtime;
+    
+    // Make a copy of the command or script if needed
+    char command_copy[TASK_COMMAND_MAX_LENGTH] = "";
+    char script_content_copy[TASK_SCRIPT_MAX_LENGTH] = "";
+    char ai_prompt_copy[TASK_AI_PROMPT_MAX_LENGTH] = "";
+    char system_metrics_copy[128] = "";
+    
+    switch (task_exec_mode) {
+        case EXEC_COMMAND:
+            safe_strcpy(command_copy, task->command, sizeof(command_copy));
+            break;
+        case EXEC_SCRIPT:
+            safe_strcpy(script_content_copy, task->script_content, sizeof(script_content_copy));
+            break;
+        case EXEC_AI_DYNAMIC:
+            safe_strcpy(ai_prompt_copy, task->ai_prompt, sizeof(ai_prompt_copy));
+            safe_strcpy(system_metrics_copy, task->system_metrics, sizeof(system_metrics_copy));
+            break;
+    }
+    
+    // Create a copy of the task for execution after unlocking
+    Task task_copy = *task;
     
     char date_str[64];
-    time_t now = time(NULL);
-    time_to_string(now, date_str, sizeof(date_str), "%Y-%m-%d %H:%M:%S");
+    time_t current_time = time(NULL);
+    time_to_string(current_time, date_str, sizeof(date_str), "%Y-%m-%d %H:%M:%S");
     
+    // Log the start of execution
     log_message(LOG_INFO, "Executing task %d (%s) at %s", task->id, task->name, date_str);
     
-    switch (task->exec_mode) {
+    // Unlock the mutex before running the task, to prevent deadlocks
+    pthread_mutex_unlock(&scheduler->lock);
+    
+    bool success = false;
+    int exit_code = 0;
+    
+    // Execute task based on execution mode - without holding the lock
+    switch (task_exec_mode) {
         case EXEC_COMMAND:
-            // Execute directly
-            success = run_command_with_timeout(task->command, working_dir, task->max_runtime, &exit_code);
+            // Execute command directly
+            log_message(LOG_DEBUG, "Executing command: %s", command_copy);
+            success = run_command_with_timeout(command_copy, 
+                                             working_dir[0] ? working_dir : NULL, 
+                                             task_max_runtime, 
+                                             &exit_code);
             break;
             
         case EXEC_SCRIPT:
-            // Execute script
-            success = execute_task_with_script(scheduler, task);
-            if (success) {
-                exit_code = 0;
-            }
+            // We handle script execution separately to ensure thread safety
+            log_message(LOG_DEBUG, "Executing script task");
+            success = execute_task_with_script(scheduler, &task_copy);
+            
+            // execute_task_with_script already handles marking the task as executed
+            // and updating the database, so we're done
+            return success;
             break;
             
         case EXEC_AI_DYNAMIC: {
             // For AI-based dynamic command generation
-            if (!task->ai_prompt[0] || !task->system_metrics[0]) {
-                log_message(LOG_ERROR, "Missing AI prompt or system metrics for task %d", task->id);
-                pthread_mutex_unlock(&scheduler->lock);
+            if (!ai_prompt_copy[0] || !system_metrics_copy[0]) {
+                log_message(LOG_ERROR, "Missing AI prompt or system metrics for task %d", task_id);
                 return false;
             }
             
@@ -460,41 +510,53 @@ bool scheduler_execute_task(Scheduler *scheduler, int task_id) {
             SystemMetrics metrics;
             init_system_metrics(&metrics);
             
-            if (!collect_system_metrics(task->system_metrics, &metrics)) {
-                log_message(LOG_ERROR, "Failed to collect system metrics for task %d", task->id);
-                pthread_mutex_unlock(&scheduler->lock);
+            if (!collect_system_metrics(system_metrics_copy, &metrics)) {
+                log_message(LOG_ERROR, "Failed to collect system metrics for task %d", task_id);
                 return false;
             }
             
             // Generate command based on metrics and prompt
-            char *cmd = ai_generate_command(&metrics, task->ai_prompt);
+            char *cmd = ai_generate_command(&metrics, ai_prompt_copy);
             if (!cmd) {
-                log_message(LOG_ERROR, "Failed to generate command for task %d", task->id);
-                pthread_mutex_unlock(&scheduler->lock);
+                log_message(LOG_ERROR, "Failed to generate command for task %d", task_id);
                 return false;
             }
             
             log_message(LOG_INFO, "AI generated command: %s", cmd);
             
             // Execute the generated command
-            success = run_command_with_timeout(cmd, working_dir, task->max_runtime, &exit_code);
+            success = run_command_with_timeout(cmd, 
+                                             working_dir[0] ? working_dir : NULL, 
+                                             task_max_runtime, 
+                                             &exit_code);
             
             free(cmd);
             break;
         }
         
         default:
-            log_message(LOG_ERROR, "Unknown execution mode for task %d", task->id);
-            pthread_mutex_unlock(&scheduler->lock);
+            log_message(LOG_ERROR, "Unknown execution mode for task %d", task_id);
             return false;
+    }
+    
+    // Reacquire the lock to update task state
+    pthread_mutex_lock(&scheduler->lock);
+    
+    // Find the task again (it might have been removed or modified)
+    idx = find_task_index(scheduler, task_id);
+    if (idx < 0) {
+        log_message(LOG_WARNING, "Task %d not found after execution, cannot update status", task_id);
+        pthread_mutex_unlock(&scheduler->lock);
+        return success;
     }
     
     // Update task information
     if (success) {
         log_message(LOG_INFO, "Task %d (%s) executed successfully with exit code %d", 
-                  task->id, task->name, exit_code);
+                  task_id, scheduler->tasks[idx].name, exit_code);
     } else {
-        log_message(LOG_ERROR, "Failed to execute task %d (%s)", task->id, task->name);
+        log_message(LOG_ERROR, "Failed to execute task %d (%s)", 
+                  task_id, scheduler->tasks[idx].name);
     }
     
     // Update task execution statistics
@@ -504,7 +566,7 @@ bool scheduler_execute_task(Scheduler *scheduler, int task_id) {
     if (success) {
         // Send email in a non-blocking way
         if (!email_send_task_notification(&scheduler->tasks[idx], exit_code)) {
-            log_message(LOG_INFO, "Email notification not sent for task %d", task->id);
+            log_message(LOG_INFO, "Email notification not sent for task %d", task_id);
         }
     }
 
@@ -952,6 +1014,9 @@ static bool execute_task_with_script(Scheduler *scheduler, Task *task) {
         return false;
     }
     
+    // Log the start of script execution
+    log_message(LOG_INFO, "Starting script execution for task %d (%s)", task->id, task->name);
+    
     // Create a temporary script file
     char temp_script_path[512];
     if (!task_prepare_script(task, temp_script_path, sizeof(temp_script_path))) {
@@ -959,7 +1024,14 @@ static bool execute_task_with_script(Scheduler *scheduler, Task *task) {
         return false;
     }
     
-    // Execute the script
+    log_message(LOG_INFO, "Created temporary script file at: %s", temp_script_path);
+    
+    // Copy important values from task as they may change during execution
+    int task_id = task->id;
+    char task_name[128];
+    safe_strcpy(task_name, task->name, sizeof(task_name));
+    
+    // Execute the script - do not hold the mutex during execution
     int exit_code = 0;
     bool result = run_command_with_timeout(
         temp_script_path,
@@ -968,16 +1040,15 @@ static bool execute_task_with_script(Scheduler *scheduler, Task *task) {
         &exit_code
     );
     
+    log_message(LOG_INFO, "Script execution completed with result=%d, exit_code=%d", result, exit_code);
+    
     // Delete the temporary script file
     if (unlink(temp_script_path) != 0) {
         log_message(LOG_WARNING, "Failed to delete temporary script file: %s", temp_script_path);
     }
     
-    // Reacquire the lock to update task status
-    pthread_mutex_lock(&scheduler->lock);
-    
     // Find the task again (it might have been removed)
-    int idx = find_task_index(scheduler, task->id);
+    int idx = find_task_index(scheduler, task_id);
     if (idx >= 0) {
         // Update task execution status
         task_mark_executed(&scheduler->tasks[idx], exit_code);
@@ -986,10 +1057,11 @@ static bool execute_task_with_script(Scheduler *scheduler, Task *task) {
         db_update_task(&scheduler->tasks[idx]);
         
         log_message(LOG_INFO, "Script task completed: ID=%d, Name=%s, Exit code=%d", 
-                  task->id, task->name, exit_code);
+                  task_id, task_name, exit_code);
+    } else {
+        log_message(LOG_WARNING, "Task not found after script execution: ID=%d, Name=%s", 
+                  task_id, task_name);
     }
-    
-    pthread_mutex_unlock(&scheduler->lock);
     
     return result;
 }

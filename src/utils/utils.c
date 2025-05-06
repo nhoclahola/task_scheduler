@@ -167,6 +167,13 @@ bool run_command_with_timeout(const char *command, const char *working_dir,
         return false;
     }
     
+    log_message(LOG_DEBUG, "Executing command with timeout %d seconds: %s", 
+               timeout_sec > 0 ? timeout_sec : 0, command);
+    
+    if (working_dir) {
+        log_message(LOG_DEBUG, "Working directory: %s", working_dir);
+    }
+    
     pid_t pid = fork();
     
     if (pid < 0) {
@@ -179,21 +186,36 @@ bool run_command_with_timeout(const char *command, const char *working_dir,
         
         // Change to the working directory if specified
         if (working_dir && chdir(working_dir) != 0) {
+            fprintf(stderr, "Failed to change to working directory: %s\n", working_dir);
             _exit(127);
         }
         
-        // Redirect output to /dev/null
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) {
-            dup2(devnull, STDOUT_FILENO);
-            dup2(devnull, STDERR_FILENO);
-            close(devnull);
+        // Create log file for command output if in debug mode
+        #ifdef DEBUG_OUTPUT
+        // Use a log file for command output to debug script issues
+        char output_log[256];
+        snprintf(output_log, sizeof(output_log), "/tmp/taskscheduler_cmd_%d.log", getpid());
+        int log_fd = open(output_log, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (log_fd >= 0) {
+            // Write command details to log
+            char header[512];
+            snprintf(header, sizeof(header), 
+                    "Command: %s\nWorking dir: %s\nPID: %d\nTime: %ld\n\n", 
+                    command, working_dir ? working_dir : "(default)", getpid(), time(NULL));
+            write(log_fd, header, strlen(header));
+            
+            // Redirect stdout and stderr to the log file
+            dup2(log_fd, STDOUT_FILENO);
+            dup2(log_fd, STDERR_FILENO);
+            close(log_fd);
         }
+        #endif
         
         // Execute the command
         execl("/bin/sh", "sh", "-c", command, NULL);
         
         // If execl returns, it failed
+        fprintf(stderr, "Failed to execute command: %s\n", command);
         _exit(127);
     }
     
@@ -218,6 +240,8 @@ bool run_command_with_timeout(const char *command, const char *working_dir,
         
         if (waited_pid == -1 && errno == EINTR) {
             // Interrupted by alarm, kill the child
+            log_message(LOG_WARNING, "Command timed out after %d seconds, killing process %d", 
+                      timeout_sec, (int)pid);
             kill(pid, SIGKILL);
             waitpid(pid, &status, 0);
             timed_out = true;
@@ -240,6 +264,7 @@ bool run_command_with_timeout(const char *command, const char *working_dir,
     
     if (WIFEXITED(status)) {
         *exit_code = WEXITSTATUS(status);
+        log_message(LOG_DEBUG, "Command completed with exit code %d: %s", *exit_code, command);
         return true;
     } else if (WIFSIGNALED(status)) {
         log_message(LOG_WARNING, "Command terminated by signal %d: %s", WTERMSIG(status), command);
